@@ -748,6 +748,9 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                     raise ValueError("unexpected inbox candidate")
             if include_closed or row["status"] not in ("closed", "tombstone"):
                 rows.append(row)
+        if not (capacity or messages_only or only_specs or decision):
+            from .directive_rank import annotate
+            rows = annotate(proof, rows, timeout=timeout)
         return Answer.complete_read(rows, how=how)
     except seeds_read_cache.WatermarkMoved:
         raise  # The outer owner projection must restart, not just this query.
@@ -837,6 +840,8 @@ def ranking_rows(proof, *, timeout: int = 30,
             ):
                 raise ValueError("incomplete or changed ranking candidate")
             rows.append(row)
+        from .directive_rank import annotate
+        rows = annotate(proof, rows, timeout=timeout)
         return Answer.complete_read(rows, how=how)
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
         return Answer.capped([], how=how, caveat=f"ranking cohorts unreadable: {error}")
@@ -876,6 +881,8 @@ def queue_rows(proof, *, timeout=30):
         for subject, row in grouped.items():
             if subject != SEEDS + 'item/' + quote(row['id'], safe=''):
                 raise ValueError('queue subject changed')
+        from .directive_rank import annotate
+        rows = annotate(proof, rows, timeout=timeout)
         return Answer.complete_read(rows, how=how)
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
         return Answer.capped([], how=how, caveat=f'queue unreadable: {error}')

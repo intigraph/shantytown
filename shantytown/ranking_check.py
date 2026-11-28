@@ -75,7 +75,7 @@ def digest(ready, rows, cards, live, *, counts):
             continue
         current = min(owned, key=lambda r: plate_key(r.get("status"), priority(r), r["id"],
                          ready_ids, rank=r.get("rank"), due_at=r.get("due_at"), created_at=r.get("created_at"),
-                         lane=r.get("lane")))
+                         lane=r.get("lane"), operator_directive=r.get("operator_directive") is True))
         higher = [r for r in unowned if priority(r) is not None and priority(current) is not None
                   and priority(r) < priority(current)]
         if higher:
@@ -94,9 +94,14 @@ def digest(ready, rows, cards, live, *, counts):
     p0_ids = set(p0)
     witnesses = {r["id"]: r for r in rows if r["id"] in p0_ids}
     witnesses.update({r["id"]: r for r in unowned})
+    boosted = {r["id"] for r in rows if r.get("operator_directive") is True}
+    witnesses = {ident: dict(row, operator_directive=ident in boosted)
+                 for ident, row in witnesses.items()}
     ordered = sorted(witnesses.values(), key=lambda r: (
         priority(r) if priority(r) is not None else math.inf,
-        *rank_order(r.get("rank"), r.get("due_at"), r.get("created_at")), r["id"]))
+        *rank_order(r.get("rank"), r.get("due_at"), r.get("created_at"))[:2],
+        0 if r.get("operator_directive") is True else 1,
+        *rank_order(r.get("rank"), r.get("due_at"), r.get("created_at"))[2:], r["id"]))
     names = ", ".join(f"{r['id']} P{priority(r) if priority(r) is not None else '?'}"
                       + (" (not READY)" if r["id"] not in ready_ids else "")
                       for r in ordered[:5])

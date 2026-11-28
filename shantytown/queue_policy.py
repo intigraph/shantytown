@@ -55,7 +55,9 @@ def validate(rows):
 
 
 def key(row):
-    return (*rank_order(row.get('rank'), row.get('due_at'), row.get('created_at')), row['id'])
+    ranked = rank_order(row.get('rank'), row.get('due_at'), row.get('created_at'))
+    return (*ranked[:2], 0 if row.get('operator_directive') is True else 1,
+            *ranked[2:], row['id'])
 
 
 def intake(rows):
@@ -95,6 +97,8 @@ def refusal(item, owner, rows):
                   and (r.get('assignee') or '').split('/')[-1] == owner.split('/')[-1]
                   and r.get('status') != 'closed']
     candidate = dict(vars(item))
+    candidate['operator_directive'] = any(r.get('id') == item.id
+        and r.get('operator_directive') is True for r in candidates)
     candidates = [r for r in candidates if r.get('id') != item.id] + [candidate]
     for row in candidates:
         if row.get('lane') not in ('now', 'next', 'later') or row.get('rank') is None:
@@ -102,7 +106,7 @@ def refusal(item, owner, rows):
         rank_order(row['rank'], row.get('due_at'), row.get('created_at'))
     top = min(candidates, key=lambda r: plate_key(r.get('status'), r.get('priority'),
         r['id'], rank=r.get('rank'), due_at=r.get('due_at'),
-        created_at=r.get('created_at'), lane=r.get('lane')))
+        created_at=r.get('created_at'), lane=r.get('lane'), operator_directive=r.get('operator_directive') is True))
     if top['id'] != item.id:
         return f"{item.id} is out of order; {top['id']} heads {owner}'s ranked plate"
     return ''
@@ -133,6 +137,8 @@ def assignment_refusal(candidate, rows, owner):
         return (f'{ident} has no Now/Next rank; assignment to {owner} refused '
                 '(rank it first, or pass --queue-override with a reason)')
     rows = validate(rows)
+    candidate = dict(candidate, operator_directive=any(r.get('id') == candidate.get('id')
+        and r.get('operator_directive') is True for r in rows))
     waiting = sorted((r for r in drop_parked(rows) if r['id'] != candidate.get('id')
                       and not _owner(r) and r.get('status') == 'open' and workable(r)),
                      key=board_key)

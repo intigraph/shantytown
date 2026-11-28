@@ -474,6 +474,9 @@ def test_feed_haul_preserves_short_and_crew_path_owners(monkeypatch, owner):
 
 
 def test_capacity_projects_blocked_and_open_alongside_held_without_hydration(monkeypatch):
+    from shantytown import directive_rank
+    monkeypatch.setattr(directive_rank, 'annotate',
+                        lambda *a, **k: pytest.fail('capacity read requested ranking evidence'))
     tracker = SdTracker(quipu=PROOF.quipu_url, prefix='test')
     monkeypatch.setattr(tracker, 'prove_store', lambda: PROOF)
     queries = []
@@ -902,7 +905,9 @@ def test_owner_projection_retries_a_moving_snapshot(monkeypatch, tmp_path, motio
         assert observed["queries"] == 6
     else:
         assert result.exact()[0]["id"] == "test-held"
-        assert observed["queries"] == (4 if motion == "settles" else 2)
+        # One additional, separately bounded ROOT advisory read after a complete
+        # owner projection. A failed/partial owner read still never attempts it.
+        assert observed["queries"] == (5 if motion == "settles" else 3)
 
 
 @pytest.mark.parametrize('marker', [

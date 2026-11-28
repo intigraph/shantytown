@@ -566,3 +566,18 @@ hydration fallback. A successful scheduled sweep logs
 `deferral-sweep: store read complete candidates=N`; this is the positive control
 for the 24-hour failure-free acceptance window, not a claim that installation
 alone completed that window.
+
+### Operator-directive ranking
+
+An explicit operator Directive can break a plate tie after lifecycle, readiness,
+lane, priority (where the lane uses it), and exact work rank. It precedes due
+date, creation time and identifier. Now and Next retain their explicit sequence
+and continue to ignore priority. Crew rulings and absent directive kinds do not
+qualify. The signal never rewrites stored priority or rank.
+
+The Seeds projections request bounded ROOT evidence for at most 256 candidate
+identifiers, with a two-second transport bound. Direct links qualify, as do
+links through a typed, canonically identified ancestor epic. An ancestor path
+shadowed in the ephemeral graph is conservatively unboosted. Missing ROOT
+coverage, refused, malformed or partial results, and exceeded bounds preserve
+the ordinary order. There are no per-item lookups or permission changes.

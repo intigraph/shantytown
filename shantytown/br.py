@@ -443,7 +443,7 @@ def _select_plate(tracker, agent, seen, failures, read_ready, warn):
                                         row.get("id", ""), ready_ids, rank=row.get("rank"),
                                         due_at=row.get("due_at"),
                                         created_at=row.get("created_at"),
-                                        lane=row.get("lane")))
+                                        lane=row.get("lane"), operator_directive=row.get("operator_directive") is True))
     row = mine[0]
     item = WorkItem(id=row.get("id", ""), title=row.get("title", ""),
                     status=row.get("status", "open"),
