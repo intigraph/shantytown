@@ -358,6 +358,11 @@ class ClaudeHarness:
     # already and the test that caught it exists for that reason.
     picker_markers = ()
     ready_patterns = ()
+    # Extra seconds the launch observer waits for this harness's ready UI, on
+    # top of the shared _LIVE_ATTEMPTS x _LIVE_DELAY window (about 5s). Zero
+    # keeps the shared window; a harness whose healthy cold start is measured
+    # near or past it says so here instead of failing every launch.
+    startup_allowance_s = 0.0
     # MEASURED 2026-10-28 on the Mac (aegis-g9w): an ephemeral job prompt sent
     # in one burst sat in the composer as `[Pasted text #1 +N lines]`, never
     # submitted, while st counted it delivered; one later Enter started it. The
