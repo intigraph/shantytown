@@ -82,8 +82,13 @@ def stale_live(agents, launches, is_live) -> list:
 
 def request_cycles(stale, requests, checkpoint, log=lambda text: None) -> list[str]:
     """File an idle REPLACE cycle for each stale non-administrator. Returns names
-    requested now. An existing request is left alone (only_if_absent): it is
-    the agent's own or another sweep's, and its relaunch loads the new file too.
+    requested or upgraded now.
+
+    A pending request is KEPT (its checkpoint is the requester's) but made a
+    relaunch: an in-place clear keeps the process and so the old settings.
+    The pending check comes BEFORE the checkpoint, because a checkpoint
+    comments on the agent's work item and a busy agent is seen on every tend
+    pass; checkpointing first posted the same comment each pass for nothing.
     """
     asked = []
     for card in stale:
@@ -91,18 +96,27 @@ def request_cycles(stale, requests, checkpoint, log=lambda text: None) -> list[s
             log(f"settings-drift: {card.name} (administrator) is {SETTINGS_STALE}; "
                 f"notice only, never cycled automatically")
             continue
-        try:
-            snap = checkpoint(card)
-        except Exception as exc:  # noqa: BLE001 — no checkpoint, no cycle
-            log(f"settings-drift: {card.name} is {SETTINGS_STALE} but the automatic "
-                f"checkpoint failed ({type(exc).__name__}: {exc}); no cycle requested")
-            continue
-        if requests.request(card.name, snap["text"], snap.get("item", ""),
-                            snap.get("nodes", []), no_in_place=True, auto=True,
-                            settings_stale=True, only_if_absent=True):
+        upgraded = requests.require_replace(card.name)
+        if upgraded is None:
+            try:
+                snap = checkpoint(card)
+            except Exception as exc:  # noqa: BLE001 — no checkpoint, no cycle
+                log(f"settings-drift: {card.name} is {SETTINGS_STALE} but the automatic "
+                    f"checkpoint failed ({type(exc).__name__}: {exc}); no cycle requested")
+                continue
+            if requests.request(card.name, snap["text"], snap.get("item", ""),
+                                snap.get("nodes", []), no_in_place=True, auto=True,
+                                settings_stale=True, only_if_absent=True):
+                asked.append(card.name)
+                log(f"settings-drift: {card.name} is {SETTINGS_STALE}; replace cycle "
+                    f"requested for its next idle pass")
+                continue
+            # Another writer filed one between the check and ours: upgrade that.
+            upgraded = requests.require_replace(card.name)
+        if upgraded:
             asked.append(card.name)
-            log(f"settings-drift: {card.name} is {SETTINGS_STALE}; replace cycle "
-                f"requested for its next idle pass")
+            log(f"settings-drift: {card.name} is {SETTINGS_STALE}; its pending cycle "
+                f"request now relaunches instead of clearing in place")
     return asked
 
 

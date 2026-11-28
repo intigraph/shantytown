@@ -106,6 +106,62 @@ def test_a_new_builder_hook_is_re_emitted_flagged_and_cycled_at_idle(root, monke
     assert NEW_HOOK in launches.snapshot("dearing").decode()
 
 
+def _counting_sweep(monkeypatch, root, during=None):
+    calls = []
+
+    def checkpoint(a, card, ev, headline=None):
+        calls.append(card.name)
+        if during:
+            during()
+        return dict(text=headline, item="", nodes=[])
+    monkeypatch.setattr(cli, "_runtime_checkpoint", checkpoint)
+    monkeypatch.setattr(cli.notify_mod, "auto_cycle_enabled", lambda: True)
+    a = SimpleNamespace(root=root, dry_run=False, backend=None)
+    asked = cli._settings_drift_sweep(a, _cards(root), _Panes(("st-sattler", "st-dearing")),
+                                      [].append)
+    return asked, calls
+
+
+def test_a_pending_in_place_request_is_kept_but_made_a_relaunch(root, monkeypatch):
+    _launch_everyone(root)
+    _add_hook_to_builder(monkeypatch)
+    reqs = cycle.Requests(root)
+    reqs.request("dearing", "own checkpoint", "aegis-x", ["n1"])
+    assert reqs.pending()["dearing"]["no_in_place"] is False
+    asked, calls = _counting_sweep(monkeypatch, root)
+    rec = reqs.pending()["dearing"]
+    # an in-place clear would keep the process, and so the stale hooks
+    assert rec["no_in_place"] is True and rec["settings_stale"] is True
+    # the requester's checkpoint and provenance are untouched
+    assert (rec["checkpoint"], rec["checkpoint_bead"], rec["quipu_nodes"], rec["auto"]) == (
+        "own checkpoint", "aegis-x", ["n1"], False)
+    assert asked == ["dearing"] and calls == []
+
+
+def test_a_pending_request_is_not_checkpointed_again_each_pass(root, monkeypatch):
+    _launch_everyone(root)
+    _add_hook_to_builder(monkeypatch)
+    first, calls = _counting_sweep(monkeypatch, root)
+    assert first == ["dearing"] and calls == ["dearing"]
+    # the agent stays busy, so the request is still pending on the next passes
+    for _ in range(3):
+        again, calls = _counting_sweep(monkeypatch, root)
+        assert again == [] and calls == []
+    assert set(cycle.Requests(root).pending()) == {"dearing"}
+
+
+def test_a_request_filed_during_the_checkpoint_is_upgraded(root, monkeypatch):
+    _launch_everyone(root)
+    _add_hook_to_builder(monkeypatch)
+    reqs = cycle.Requests(root)
+    asked, calls = _counting_sweep(
+        monkeypatch, root, during=lambda: reqs.request("dearing", "raced in"))
+    rec = reqs.pending()["dearing"]
+    assert rec["checkpoint"] == "raced in"
+    assert rec["no_in_place"] is True and rec["settings_stale"] is True
+    assert asked == ["dearing"] and calls == ["dearing"]
+
+
 def test_a_down_agent_is_not_cycled(root, monkeypatch):
     _launch_everyone(root)
     _add_hook_to_builder(monkeypatch)

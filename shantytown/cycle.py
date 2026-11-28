@@ -685,6 +685,32 @@ class Requests:
             self._save(data)
             return True
 
+    def require_replace(self, agent: str) -> bool | None:
+        """Make an agent's PENDING request a settings-stale relaunch.
+
+        None when nothing is pending (the caller files its own request).
+        Otherwise True when the record was upgraded, False when it already
+        was one. aegis-za4f.20 review: settings_drift left an existing request
+        untouched, but the agent's own request may be in-place, and an
+        in-place clear keeps the process and so the stale hooks. Every other
+        field (checkpoint, auto, refusal) is the requester's and is kept.
+        """
+        with self._locked():
+            data = self._load()
+            if agent not in data:
+                return None
+            record = data[agent]
+            if not isinstance(record, dict):
+                record = {"checkpoint": str(record), "checkpoint_bead": "",
+                          "quipu_nodes": []}
+            if record.get("no_in_place") is True and record.get("settings_stale") is True:
+                return False
+            record["no_in_place"] = True
+            record["settings_stale"] = True
+            data[agent] = record
+            self._save(data)
+            return True
+
     def mark_refused(self, agent: str, reason: str, risks=()) -> bool:
         """Record WHY a pending cycle did not happen (aegis-7xptd5).
 
