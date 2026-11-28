@@ -1889,7 +1889,7 @@ def _composer(screen: str):
 #: `╹` row closes them.
 _OC_BAR = "┃"
 _OC_FOOT = re.compile(r"^\s*╹▀+\s*$")
-_OC_FG = re.compile(r"\x1b\[38;2;(\d+;\d+;\d+)m")
+_SGR = re.compile(r"\x1b\[([0-9;:]*)m")
 _OC_SUGGESTION_FG = "128;128;128"
 _OC_SUGGESTION = "Ask anything"
 #: The header row of an opencode reply ("▣  Build · <model>"), drawn on submit.
@@ -1921,12 +1921,46 @@ def _opencode_box(screen: str):
         text = plain[k].lstrip()[1:].strip("\xa0 \t")
         if text.startswith(_OC_SUGGESTION):
             after = raw[k][raw[k].find(_OC_BAR) + 1:]
-            before_text = after[:after.find(_OC_SUGGESTION)]
-            colours = _OC_FG.findall(before_text)
-            if colours and colours[-1] == _OC_SUGGESTION_FG:
+            if _effective_fg(after[:after.find(_OC_SUGGESTION)]) == _OC_SUGGESTION_FG:
                 text = ""
         rows.append(text)
     return rows, plain[:top]
+
+
+def _effective_fg(prefix: str) -> str | None:
+    """The foreground colour in force at the end of `prefix`, replaying every SGR.
+
+    Only the LAST colour set counts, and a later reset clears it: gray then
+    `\\x1b[0m` or `\\x1b[39m` before the text is the default colour, not the
+    suggestion (review of #835). 24-bit colours read "r;g;b", 256-colour "5:n",
+    basic ones "ansi:n". Anything this cannot parse reads as "?", which never
+    matches the suggestion, so the row is judged as text and st types nothing."""
+    fg: str | None = None
+    for params in _SGR.findall(prefix):
+        codes = params.split(";") if params else ["0"]
+        i = 0
+        while i < len(codes):
+            code = codes[i] or "0"
+            if not code.isdigit():
+                return "?"
+            n = int(code)
+            if n in (0, 39):
+                fg = None
+            elif 30 <= n <= 37 or 90 <= n <= 97:
+                fg = f"ansi:{n}"
+            elif n in (38, 48):
+                mode = codes[i + 1] if i + 1 < len(codes) else ""
+                width = 3 if mode == "2" else 1 if mode == "5" else None
+                if width is None:
+                    return "?"
+                value = codes[i + 2:i + 2 + width]
+                if len(value) != width or not all(v.isdigit() for v in value):
+                    return "?"
+                if n == 38:
+                    fg = ";".join(value) if mode == "2" else f"5:{value[0]}"
+                i += 1 + width
+            i += 1
+    return fg
 
 
 def _opencode_replies(screen: str) -> int:

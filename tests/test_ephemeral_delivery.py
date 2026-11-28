@@ -531,3 +531,39 @@ def test_opencode_job_is_typed_submitted_and_seen_starting():
                                sleep=lambda s: None)
     assert started, why
     assert typed == [_OC_SHORT] and submits == [1]
+
+
+_GRAY = "\x1b[38;2;128;128;128m"
+
+
+def _oc_suggestion_followed_by(code: str) -> str:
+    screen = _oc("empty.txt")
+    assert screen.count(_GRAY + "Ask anything") == 1
+    return screen.replace(_GRAY + "Ask anything", _GRAY + code + "Ask anything")
+
+
+@pytest.mark.parametrize("code", [
+    "\x1b[0m", "\x1b[39m", "\x1b[m",          # resets: the text is the default colour
+    "\x1b[38;2;238;238;238m",                 # typed-text colour
+    "\x1b[38;5;245m", "\x1b[37m",             # 256-colour and basic gray are not the suggestion
+    "\x1b[38;2m",                             # malformed: cannot tell, so not empty
+])
+def test_opencode_text_after_a_colour_change_is_not_the_suggestion(code):
+    # Review of #835 (kelly): gray then a reset before "Ask anything" read as
+    # the gray suggestion, so the box looked EMPTY and st would type over text
+    # it did not put there. The colour in force at the text decides.
+    screen = _oc_suggestion_followed_by(code)
+    assert eph.box_state(screen, _OC_SHORT) == eph.FOREIGN
+    typed = []
+    started, why = eph.deliver(_OC_SHORT, type_text=typed.append, submit=lambda: None,
+                               capture=lambda: screen, alive=lambda: True,
+                               sleep=lambda s: None)
+    assert not started and typed == [], why
+
+
+@pytest.mark.parametrize("code", ["\x1b[0m\x1b[38;2;128;128;128m", "\x1b[48;2;30;30;30m"])
+def test_opencode_suggestion_stays_empty_when_gray_is_still_in_force(code):
+    # Positive controls: gray set again after a reset, or a background change
+    # after gray, leaves the suggestion gray.
+    screen = _oc_suggestion_followed_by(code)
+    assert eph.box_state(screen, _OC_SHORT) == eph.EMPTY
