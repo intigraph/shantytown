@@ -39,7 +39,9 @@ from typing import Callable
 
 PREFIX = "eph-"
 JOBS = ("review", "merge", "triage", "task")
-VERDICTS = ("approve", "request-changes", "merged", "blocked", "done", "failed")
+#: "enqueued" (aegis-1jtb): the guarded merge ADDED the PR to the forge's merge
+#: queue and it has not landed. Appended, so the legacy prefix stays stable.
+VERDICTS = ("approve", "request-changes", "merged", "blocked", "done", "failed", "enqueued")
 
 
 def job_verdicts(rec: dict, spec: dict | None = None) -> tuple[str, ...]:
@@ -82,6 +84,19 @@ class Refused(Exception):
 class OverCap(Refused):
     """Refused only because every slot is taken. A fresh spawn turns this into a
     queued ticket (aegis-cui); every other refusal still refuses."""
+
+
+class LaneWait(OverCap):
+    """Refused only because the repo's merge lane is busy: held by a live merge
+    job, or spacing merges apart (aegis-1jtb). Like OverCap it QUEUES rather
+    than refuses: a ticket refused for a busy lane used to be dropped as failed,
+    so nothing queued behind a merge ever landed without a human respawn.
+    `not_before` is when spacing ends (None while a job holds the lane: the
+    holder's own end drains the queue)."""
+
+    def __init__(self, message: str, not_before: float | None = None):
+        super().__init__(message)
+        self.not_before = not_before
 
 
 # --- naming + the ledger ------------------------------------------------------
@@ -173,6 +188,36 @@ def task_holders(root, item: str, *, ticket: str | None = None,
             and r.get("name") != superseded]
     held += [f"{t['id']} ({t.get('state')} ticket)" for t in tickets(root)
              if t.get("job") == "task" and t.get("item") == item and t.get("id") != ticket]
+    return held
+
+
+def merge_holders(root, repo: str, pr, *, ticket: str | None = None,
+                  superseded: str | None = None) -> list[str]:
+    """Live merge jobs and queued or claimed merge tickets already on repo#pr
+    (aegis-1jtb: #753 got three merge jobs, each re-running a merge the forge
+    had already queued). Caller holds lock()."""
+    def same(r):
+        return r.get("job") == "merge" and r.get("repo") == repo and str(r.get("pr")) == str(pr)
+    held = [f"{r['name']} ({r.get('state')})" for r in live(root)
+            if same(r) and r.get("name") != superseded]
+    held += [f"{t['id']} ({t.get('state')} ticket)" for t in tickets(root)
+             if same(t) and t.get("id") != ticket]
+    return held
+
+
+def review_holders(root, item: str, repo, pr, head, *, ticket: str | None = None,
+                   superseded: str | None = None) -> list[str]:
+    """Live review jobs and queued or claimed review tickets for the same
+    (item, repo#pr, head) (aegis-1jtb, sattler 2026-11-28: five duplicate review
+    tickets queued for one item within two minutes). A new head is a new review
+    and does not coalesce. Caller holds lock()."""
+    def same(r):
+        return (r.get("job") == "review" and r.get("item") == item and r.get("repo") == repo
+                and str(r.get("pr")) == str(pr) and (r.get("head") or None) == (head or None))
+    held = [f"{r['name']} ({r.get('state')})" for r in live(root)
+            if same(r) and r.get("name") != superseded]
+    held += [f"{t['id']} ({t.get('state')} ticket)" for t in tickets(root)
+             if same(t) and t.get("id") != ticket]
     return held
 
 
@@ -380,20 +425,27 @@ def cap_refusal(root, policy, harness: str | None = None, job: str | None = None
 def lane_refusal(root, repo: str, spacing_minutes: int, now: float) -> str:
     """The repo's serialized merge lane: one merge job at a time, and a gap
     between them. A merge job HOLDS the lane for its whole life."""
+    return lane_state(root, repo, spacing_minutes, now)[0]
+
+
+def lane_state(root, repo: str, spacing_minutes: int, now: float) -> tuple[str, float | None]:
+    """(refusal, not_before) for the repo's merge lane: "" when free. not_before
+    is when spacing ends, or None while a live job holds the lane."""
     merges = [r for r in records(root) if r.get("job") == "merge" and r.get("repo") == repo]
     holder = next((r for r in merges if r.get("state") in (LAUNCHING, LIVE, ENDING)), None)
     if holder:
-        return f"merge lane for {repo} is held by {holder['name']}; one merge at a time"
+        return f"merge lane for {repo} is held by {holder['name']}; one merge at a time", None
     # Spacing follows MERGES. A job that ended without merging (blocked, failed,
-    # stopped) frees the lane at once: there is no deploy to space behind.
+    # stopped) frees the lane at once: there is no deploy to space behind. An
+    # enqueued PR is a merge in flight, so it is spaced behind like one.
     ended = [r.get("ended_at") or 0 for r in merges
-             if (r.get("result") or {}).get("verdict") == "merged"]
+             if (r.get("result") or {}).get("verdict") in ("merged", "enqueued")]
     last = max(ended, default=0)
     wait = last + spacing_minutes * 60 - now
     if wait > 0:
         return (f"merge lane for {repo} is spacing merges {spacing_minutes}m apart; "
-                f"next slot in {int(wait // 60) + 1}m")
-    return ""
+                f"next slot in {int(wait // 60) + 1}m"), last + spacing_minutes * 60
+    return "", None
 
 
 def plan(req: Request, *, root, policy, actor, administrator, host, now,
@@ -424,8 +476,10 @@ def plan(req: Request, *, root, policy, actor, administrator, host, now,
         if policy.review_enqueue_enabled:
             raise Refused("merge jobs are retired while review enqueue is enabled; "
                           "use the verified review report Action")
-        if refusal := lane_refusal(root, req.repo, policy.merge_spacing_minutes, now):
-            raise Refused(refusal)
+        refusal, not_before = lane_state(root, req.repo, policy.merge_spacing_minutes, now)
+        if refusal:
+            # Queue, never drop (aegis-1jtb): a busy lane is a wait, not a defect.
+            raise LaneWait(refusal, not_before)
     name = name or new_name(req.job)
     bounds = (getattr(policy, "limits", {}) or {}).get(req.job, {})
     lifetime = bounds.get("lifetime_minutes", policy.lifetime_minutes)
@@ -492,6 +546,7 @@ def _ticket_path(root, tid: str) -> Path:
 
 def ticket_for(req: Request, *, harness: str, priority: int | None,
                requester: str | None, now: float, despite_live: str | None = None,
+               not_before: float | None = None,
                token: Callable[[], str] = lambda: secrets.token_hex(6)) -> dict:
     return {
         "id": f"{TICKET_PREFIX}{token()}", "job": req.job, "item": req.item,
@@ -499,7 +554,7 @@ def ticket_for(req: Request, *, harness: str, priority: int | None,
         "harness": harness, "track": req.track or DEFAULT_TRACK, "priority": priority,
         "requester": requester or "operator", "enqueued_at": now,
         "state": QUEUED, "claimed_by": None, "claimed_at": None,
-        "despite_live": despite_live,
+        "despite_live": despite_live, "not_before": not_before,
     }
 
 
@@ -549,13 +604,17 @@ def settle(root, tid: str) -> None:
         pass
 
 
-def release(root, tid: str, *, recovered: bool = False) -> None:
+def release(root, tid: str, *, recovered: bool = False,
+            not_before: float | None = None) -> None:
     """Back to queued, keeping its age: the claimer found no slot after all.
-    `recovered` counts a dead claimer, which claim_next() tolerates only once."""
+    `recovered` counts a dead claimer, which claim_next() tolerates only once.
+    `not_before` (a busy merge lane's spacing end) keeps the drain from
+    claiming it again before then."""
     t = read_ticket(root, tid)
     if t is not None:
         n = (t.get("recoveries") or 0) + (1 if recovered else 0)
-        _put(root, dict(t, state=QUEUED, claimed_by=None, claimed_at=None, recoveries=n))
+        _put(root, dict(t, state=QUEUED, claimed_by=None, claimed_at=None, recoveries=n,
+                        not_before=not_before))
 
 
 def drop(root, tid: str, reason: str, now: float) -> str:
@@ -764,7 +823,7 @@ def claim_next(root, *, cap: int, item_state: Callable[[str], str], now: float,
                pid: int | None = None, pid_alive: Callable[[int], bool] = _pid_alive,
                harness_caps: dict | None = None, shares: dict | None = None,
                job_caps: dict | None = None,
-               disk_hold: str = "") -> tuple[dict | None, list[str]]:
+               disk_hold: str = "", skip=()) -> tuple[dict | None, list[str]]:
     """Recover interrupted claims, then claim the best routed ticket (track
     share, priority, age; within its harness's capacity) whose item is open, if
     a slot is free. Caller holds lock().
@@ -801,6 +860,10 @@ def claim_next(root, *, cap: int, item_state: Callable[[str], str], now: float,
                        harness_caps=harness_caps or {}, shares=shares or {},
                        job_caps=job_caps or {})
     for t in candidates:
+        # Already tried this pass, or waiting out a merge lane's spacing
+        # (aegis-1jtb): skip it and try the next ticket, never stop the drain.
+        if t["id"] in skip or (t.get("not_before") or 0) > now:
+            continue
         state = item_state(t["item"])
         if state in ("closed", "missing"):
             lines.append(drop(root, t["id"], f"item {t['item']} is {state}", now))
@@ -1216,6 +1279,10 @@ TRUST_SURFACE = (".claude", ".mcp.json", ".codex", ".agents", "AGENTS.md", "CLAU
 
 INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md")
 
+#: Harness workspace files st's provisioning writes into a job worktree and
+#: records by sha256 in rec["kit_files_sha256"] (provision._record_job_kit_file).
+KIT_FILES = (".agents/hooks.json", ".agents/mcp_config.json")
+
 
 def _only_tooling_block(base_text: str, path: Path) -> bool:
     """Does the worktree file equal the base file once st's provisioned tooling
@@ -1285,7 +1352,8 @@ def trust_surface_refusal(rec: dict | None, *, run=None, expected_servers=None) 
       - every UNTRACKED path there is st's kit: the job's settings.local.json
         with the exact sha256 st recorded when it wrote it, a provisioned skill
         (.claude/skills or .agents/skills)
-        that is a symlink resolving OUTSIDE the worktree, or an untracked
+        that is a symlink resolving OUTSIDE the worktree, an agy kit file
+        (KIT_FILES) with the exact sha256 provisioning recorded, or an untracked
         .mcp.json naming only the provisioned servers AND holding the exact
         bytes provisioning recorded for this job (kit_mcp_sha256);
       - a TRACKED .mcp.json is held to that same rule. Provisioning replaces
@@ -1372,6 +1440,16 @@ def trust_surface_refusal(rec: dict | None, *, run=None, expected_servers=None) 
         elif rel == ".mcp.json":
             if why := mcp_refusal(path):
                 return why
+        elif rel in KIT_FILES:
+            files = rec.get("kit_files_sha256")
+            want = files.get(rel) if isinstance(files, dict) else None
+            if not want or path.is_symlink():
+                return f"{rel} was not written by st's provisioning for this job"
+            try:
+                if hashlib.sha256(path.read_bytes()).hexdigest() != want:
+                    return f"{rel} differs from the kit st provisioned for this job"
+            except OSError:
+                return f"{rel} is unreadable"
         elif rel in INSTRUCTION_FILES:
             # A repository that tracks no instruction file (intigraph/tambo,
             # aegis-47ca): provisioning creates it from empty, so it is
@@ -1617,7 +1695,9 @@ for you for as long as you live; it is why no other merge can run beside you. Ne
    If the PR's head is no longer {head}, report blocked: a new head needs a new review.
    NEVER run `gh pr merge` yourself, never `--admin`, never push to the base branch, never bypass or
    edit branch protection, never force-push.
-4. If any condition is unproven or the merge is refused, report --verdict blocked with the reason. Otherwise --verdict merged.""",
+4. If any condition is unproven or the merge is refused, report --verdict blocked with the reason. Otherwise
+   report the verdict the guarded merge PRINTS, never one you infer: --verdict merged only when it says the
+   PR merged; --verdict enqueued when it says the PR was only added to the merge queue (it has NOT landed).""",
     "triage": """JOB: diagnose the ONE failure or alert described by {item}{target_short}.
 1. Identify the subject from the item and the bounded context. For an infrastructure alert, use admitted
    alert/metrics/service READ tools; do not invent a CI run. Use forge run/check logs only for a CI failure.
@@ -2042,6 +2122,45 @@ def merge_gate(rec: dict | None, head: str, pr: dict, reviews: list, checks: lis
     return ""
 
 
+#: One read of what `gh pr merge` actually did (aegis-1jtb). A repo with a merge
+#: queue makes `gh pr merge` exit 0 after only ENQUEUEING the PR: shantytown#762
+#: was reported "MERGED" while REST said merged=false and GraphQL said
+#: isInMergeQueue=true, position 1, and its head was not on main.
+MERGE_STATE_QUERY = """query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) { pullRequest(number: $number) {
+    state merged mergedAt headRefOid mergeCommit { oid }
+    isInMergeQueue mergeQueueEntry { position enqueuedAt state }
+  } }
+}"""
+
+
+def merge_outcome(node, repo: str, pr: int, head: str) -> tuple[str, str]:
+    """(verdict, line) for the PR state read AFTER `gh pr merge` returned 0.
+
+    Pure. Only merged=true is "merged"; a PR in the merge queue is "enqueued"
+    with its position and enqueuedAt, never "merged", because a red merge_group
+    run or a conflict can still eject it. Anything else, including an
+    unreadable answer, is "blocked" with the observed state, so a zero exit
+    code alone can never be reported as a landing."""
+    if not isinstance(node, dict):
+        return "blocked", f"{repo}#{pr}: the PR state after the merge was unreadable"
+    observed = (f"state={node.get('state')} merged={node.get('merged')} "
+                f"isInMergeQueue={node.get('isInMergeQueue')}")
+    if node.get("merged") is True:
+        commit = (node.get("mergeCommit") or {}).get("oid") or "UNKNOWN"
+        return "merged", (f"merged {repo}#{pr} at head {head} as merge commit {commit} "
+                          f"(mergedAt {node.get('mergedAt') or 'UNKNOWN'})")
+    entry = node.get("mergeQueueEntry")
+    if node.get("isInMergeQueue") is True or isinstance(entry, dict):
+        entry = entry if isinstance(entry, dict) else {}
+        return "enqueued", (f"enqueued {repo}#{pr} at head {head} in the merge queue, NOT "
+                            f"merged: position {entry.get('position', 'UNKNOWN')}, "
+                            f"enqueuedAt {entry.get('enqueuedAt') or 'UNKNOWN'}, "
+                            f"queue state {entry.get('state') or 'UNKNOWN'}")
+    return "blocked", (f"{repo}#{pr}: gh pr merge exited 0 but the PR is neither merged nor "
+                       f"in the merge queue ({observed})")
+
+
 # --- identity that does not rest on the environment ---------------------------
 
 def inside_ephemeral(root, *, cwd: Path, ancestors: list[int],
@@ -2274,28 +2393,112 @@ def record_result(root, name: str, verdict: str, summary: str, cause: str,
     return rec
 
 
-def report_text(rec: dict) -> str:
+def report_head(rec: dict) -> str:
+    """The result's headline, built from ledger fields st owns. It carries no
+    agent-authored text, which is what lets st sign it (wake_text)."""
     r = rec["result"]
     target = f" {rec['repo']}#{rec['pr']}" if rec.get("pr") else ""
     head = (f"[ephemeral {rec['job']}{target}] {rec['name']} ({rec['harness']}, "
             f"attempt {rec.get('attempt', 1)}): {r['verdict'].upper()}")
     if r["cause"] != "report":
         head += f" — ended by {r['cause']}"
-    return head + ("\n\n" + r["summary"] if r["summary"] else "")
+    return head
 
 
-def notify(rec: dict, *, persist_event, comment) -> list[str]:
-    """Tell the administrator and the item. Each leg is best-effort and named
-    when it fails: one lost leg must not hide the other, and neither may block
-    teardown (an agent that cannot report must still not outlive its bounds)."""
+def report_text(rec: dict) -> str:
+    r = rec["result"]
+    return report_head(rec) + ("\n\n" + r["summary"] if r["summary"] else "")
+
+
+def wake_text(rec: dict) -> str:
+    """The live wake typed into a spawner's pane: a pointer, never the summary.
+    The summary is the job agent's own words (for a review job, shaped by the
+    PR it read); the wake is signed by st, so it must hold only what st wrote.
+    The summary stays in the durable event and the item comment, unsigned."""
+    return (f"{report_head(rec)} for {rec['item']}. Read the result in your "
+            f"stop events or on the item comment.")
+
+
+#: Crew roles whose own job's result goes back to them, not to the
+#: administrator (aegis-0dh5). An administrator spawner is the old path anyway.
+SPAWNER_ROLES = ("lead", "worker", "keeper")
+
+
+def result_recipient(rec: dict, *, card_of=None, is_up=None) -> tuple[str, str]:
+    """Who hears this job's result, and a note when that is a fallback.
+
+    aegis-0dh5, measured 2026-11-27: lead ellie spawned eph-task-25723e and
+    waited on it; its DONE went to rec["administrator"] (sattler), so ellie sat
+    idle 56 min with ready work while the result sat in a context that was then
+    cycled. The SPAWNER is the one waiting, so a crew spawner gets it. The
+    administrator gets it only when it spawned the job itself, or when the
+    spawner is unknown, not a crew role, retired or down: a result must
+    always land somewhere live, never on a card nobody reads.
+
+    card_of(name) -> card or None; is_up(card) -> bool. Either missing (or
+    raising) means UNKNOWN, which routes to the administrator, never nowhere."""
+    admin = rec["administrator"]
+    spawner = rec.get("spawned_by")
+    if not spawner or spawner in (admin, "operator"):
+        return admin, ""
+    if card_of is None or is_up is None:
+        return admin, f"spawner {spawner} unresolved; routed to the administrator"
+    try:
+        card = card_of(spawner)
+    except Exception:  # noqa: BLE001 -- an unreadable registry is UNKNOWN
+        card = None
+    if card is None:
+        return admin, f"spawner {spawner} unknown; routed to the administrator"
+    if getattr(card, "role", None) not in SPAWNER_ROLES or getattr(card, "retired", None):
+        return admin, f"spawner {spawner} is not live crew; routed to the administrator"
+    try:
+        up = bool(is_up(card))
+    except Exception:  # noqa: BLE001
+        up = False
+    if not up:
+        return admin, f"spawner {spawner} is down; routed to the administrator"
+    return spawner, ""
+
+
+def notify(rec: dict, *, persist_event, comment, card_of=None, is_up=None,
+           wake=None) -> list[str]:
+    """Tell whoever is waiting on the job (result_recipient) and the item. Each
+    leg is best-effort and named when it fails: one lost leg must not hide the
+    other, and none may block teardown (an agent that cannot report must still
+    not outlive its bounds).
+
+    The event is durable and drains at the recipient's next stop; an IDLE
+    recipient never stops again, so `wake(name, text)` also types a pointer
+    into its pane. That live wake is what ellie never got (aegis-0dh5).
+    wake returns True (delivered), False (not typed) or None (typed, submit
+    unconfirmed); the text it is given is wake_text, never the summary."""
     problems = []
     text = report_text(rec)
+    to, why = result_recipient(rec, card_of=card_of, is_up=is_up)
+    detail = (f"({why}) " if why else "") + text
     try:
-        persist_event(to=rec["administrator"], frm=rec["name"], reason=RESULT_REASON,
-                      rose=False, item=rec["item"], item_status=None,
-                      detail=text[:600], key=f"ephemeral:{rec['name']}:result")
+        persist_event(to=to, frm=rec["name"], reason=RESULT_REASON,
+                      rose=bool(why), item=rec["item"], item_status=None,
+                      detail=detail[:600], key=f"ephemeral:{rec['name']}:result")
     except Exception as exc:  # noqa: BLE001
-        problems.append(f"administrator event NOT written ({type(exc).__name__})")
+        problems.append(f"result event for {to} NOT written ({type(exc).__name__})")
+    if wake is not None and to != rec["administrator"]:
+        try:
+            woke = wake(to, wake_text(rec))
+        except Exception as exc:  # noqa: BLE001
+            woke = False
+            problems.append(f"live wake of spawner {to} NOT delivered ({type(exc).__name__})")
+        else:
+            if woke is None:
+                # The keys went in but the submit was not confirmed: the text
+                # may well be in the pane, so "NOT delivered" would be a lie,
+                # and a resend could type it twice.
+                problems.append(f"live wake of spawner {to} UNVERIFIED (typed, "
+                                "submit not confirmed; not resent); the durable "
+                                "event is pending")
+            elif not woke:
+                problems.append(f"live wake of spawner {to} NOT delivered; "
+                                "the durable event is pending")
     try:
         comment(rec["item"], text)
     except Exception as exc:  # noqa: BLE001
@@ -2518,12 +2721,38 @@ def teardown(root, name: str, *, kill_session, git=_git, now: float | None = Non
     return rec
 
 
+def claim_wake(root, name: str, now: float) -> bool:
+    """True exactly once per job. The result event is keyed, so a second
+    ending (a report racing a reap) writes nothing new, but a pane is not a
+    keyed store: without this claim the same wake is typed into the spawner's
+    prompt again. Claimed before the send, so a crash mid-send never doubles."""
+    with lock(root):
+        rec = read(root, name)
+        if rec is None or rec.get("woken_at") is not None:
+            return False
+        rec["woken_at"] = now
+        write(root, rec)
+    return True
+
+
+def _wake_once(root, name: str, wake):
+    def once(to, text):
+        if not claim_wake(root, name, time.time()):
+            return True           # already woken by the first ending; not a fault
+        return wake(to, text)
+    return once
+
+
 def finish(root, name: str, verdict: str, summary: str, cause: str, *,
-           persist_event, comment, schedule_teardown, now: float) -> tuple[dict, list[str]]:
+           persist_event, comment, schedule_teardown, now: float,
+           card_of=None, is_up=None, wake=None) -> tuple[dict, list[str]]:
     rec = record_result(root, name, verdict, summary, cause, now)
     # The run ends on the RECORDED result: a second ending keeps the first story.
     run_end(root, name, rec["result"]["verdict"])
-    problems = notify(rec, persist_event=persist_event, comment=comment)
+    if wake is not None:
+        wake = _wake_once(root, name, wake)
+    problems = notify(rec, persist_event=persist_event, comment=comment,
+                      card_of=card_of, is_up=is_up, wake=wake)
     schedule_teardown(name)
     return rec, problems
 

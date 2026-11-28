@@ -21,7 +21,7 @@ disappear without anyone being told. Each rule below closes one of those gaps.
 | Unbounded spend             | A turn budget (`max_turns`) and a context budget (`max_context_k`) are checked at every Stop. The agent counts in the usage governor like any card and carries the `first` survival band, so a governor tier sheds it first. |
 | Unbounded fan-out           | `max_agents` caps how many ephemeral agents can be live on a host at once. The fleet governor's lane cap and its tier exclusions apply too. Over cap, a fresh `--ephemeral` spawn is **queued as a visible ticket** (`--list`, `st crew`) and launched when a job ends; retries, recruitment and `max_agents = 0` are still refused. See [The spawn queue](#the-spawn-queue). |
 | A slot spent on a foreign forge | Review and merge jobs read the PR through `gh`, so they work on GitHub only. Before anything is read, locked, cut or launched, spawn resolves the `--repo` forge from the origin of the checkout the job would be cut from. A non-GitHub host is **refused** in one line naming the forge (route the PR to a crew reviewer instead); no slot is spent and no worktree is left behind (aegis-maw). Task jobs are not checked, and an unresolvable origin admits as before. |
-| Silent exit                 | Every ending writes a result to the ledger, comments on the work item and sends one `ephemeral-result` event to the administrator. That includes a clean report, a timeout, a budget hit, a dead pane, an undelivered job and a manual stop. The event is keyed, so a retried report is never sent twice. The administrator's drain renders it as a **finished job** (verdict + item), never as a stopped crew member to re-dispatch. An ephemeral agent's per-turn stops send no crew stop event at all. |
+| Silent exit                 | Every ending writes a result to the ledger, comments on the work item and sends one `ephemeral-result` event to whoever is waiting on it: the **spawner** (`spawned_by`) when that is a live lead, worker or keeper, with a live wake typed into its pane as well (an st-signed pointer built from the ledger, typed once per job; the job agent's summary stays in the event and is never signed), because an idle spawner never stops again to drain the event (aegis-0dh5: a lead sat idle 56 min while her own job's DONE went to the administrator). The administrator gets it when it spawned the job, or when the spawner is unknown, retired, not crew or down; that fallback event is marked risen and names why. That includes a clean report, a timeout, a budget hit, a dead pane, an undelivered job and a manual stop. The event is keyed, so a retried report is never sent twice. The administrator's drain renders it as a **finished job** (verdict + item), never as a stopped crew member to re-dispatch. An ephemeral agent's per-turn stops send no crew stop event at all. |
 | Unfed panes                 | The job prompt is the agent's verified first turn. On macOS, hook verification is always "cannot tell" because there is no `/proc`, so an ephemeral job is delivered anyway; the deadline does not depend on hooks. Delivered means the job's turn STARTED, not that its text landed: on Claude Code st checks the composer is empty, types the job with no Enter, waits to see it in the box (a long job shows as `[Pasted text #1 +N lines]`), presses Enter as its own keystroke and waits to see the turn start (busy marker, spinner, context-left drop or the job echoed). It presses Enter again, up to three times, only while the box holds just the job, and never on text it did not type. A pane whose job did not start is ended at once as `launch failed`, with the reason. |
 | Respawned zombies           | `st fleet tend` never respawns an ephemeral card. When the pane is dead or past its deadline, tend reaps it instead. The reap runs first in every tend pass, before any early return for a hold or a registry error. A job is `launching` until its job is delivered; tend leaves a launching job with no pane alone for `LAUNCH_GRACE_S` (10 min), so a pass mid-spawn cannot orphan the pane. |
 | Mistaken for crew capacity  | Rule Zero / `free_feedable_workers` skip ephemeral cards, so a coordinator is never told to dispatch board work to one. |
@@ -127,7 +127,7 @@ spawn ─► admit (authority, cap, governor, merge lane) ─► ledger "live" +
       ─► agent works … each Stop: turn/context/deadline check
       ─► `st agent spawn --report --verdict V --summary S`
             (or deadline / budget / dead pane / --stop)
-      ─► result: ledger + item comment + stop event to the administrator
+      ─► result: ledger + item comment + stop event (and live wake) to the spawner, else the administrator
       ─► teardown: card removed, tmux session killed, worktree removed iff unchanged
 ```
 
@@ -228,6 +228,26 @@ permission and leave the ledger read-only. An empty summary is refused before
 publishing a verdict or ending the job. Existing stdin reports remain supported
 for callers that can supply stdin without wrapping the command.
 
+The guarded merge reads the PR back after `gh pr merge` exits 0, because on a
+repo with a merge queue that exit only means the PR was ADDED to the queue
+(shantytown#762 was reported merged while it sat at queue position 1). It prints
+the verdict the job must report: `merged` only when the forge says merged=true,
+with the merge commit; `enqueued` when the PR is in the merge queue, with its
+position and enqueuedAt; anything else is refused so the job reports `blocked`
+with the observed state. `enqueued` is appended to the legacy verdict enum,
+spaces the merge lane like a merge, and does not release the lane as failed.
+
+The guarded merge also reads the PR once BEFORE `gh pr merge`: a PR that is
+already merged or in the merge queue is reported as such and never merged again.
+A merge spawn does the same read first and launches nothing for such a PR
+(#753 got three merge jobs, each re-running a merge the queue already held).
+Unreadable proceeds, since the guarded merge reads again before it acts.
+
+One per PR: a merge spawn refuses, naming the holder, when the same repo#PR
+already has a live merge job or a queued or claimed merge ticket. A review
+spawn refuses the same way for the same (item, repo#PR, head); a new head is a
+new review.
+
 ## The spawn queue
 
 aegis-cui. Before it, a spawn over the cap was refused and the work was lost
@@ -241,8 +261,18 @@ refusal is the cap writes a ticket and exits 0:
 `--dry-run` prints `would queue ...` and writes nothing. A ticket records the
 job kind, item, repo/PR/checkout, harness, track, priority, requester and
 `enqueued_at`, one JSON file per ticket under `<root>/ephemeral/queue/`.
-Every other refusal (authority, no administrator, merge lane, governor,
-`max_agents = 0`) still refuses, as do `--retry` and scoped recruitment.
+A busy merge lane QUEUES the same way (aegis-1jtb): held by a live merge job,
+or spacing merges apart. A drained ticket that meets a busy lane goes back to
+queued, and only that ticket: with `not_before` set to the end of the spacing,
+or with none while a job holds the lane (the holder's own end drains it). The
+drain then tries the next ticket instead of stopping. A spacing-gated ticket
+launches at the first drain after its `not_before`; there is no poller, so that
+is the next job end. Before this, both refusals dropped the ticket as failed
+(11 tickets at 00:04Z on 2026-11-28), and nothing queued behind a merge landed
+without a human respawn. Nothing is queued for a CLOSED item: the spawn refuses
+where the requester sees it, instead of leaving the drain to drop the ticket.
+Every other refusal (authority, no administrator, governor, `max_agents = 0`)
+still refuses, as do `--retry` and scoped recruitment.
 
 **Drain on job end, no poller.** Every end path frees its slot and kicks the
 queue: `--stop` and the reaper after their synchronous teardown, `--report`
@@ -294,7 +324,17 @@ not the signed controller `recruit_*` path.
 - **Superseded** (settled): the file holds a newer head for that PR, so the
   step is stale. The new head's own events re-arm it. "Newer" means later in
   the file, so the emitter must append lines in observation order. A line
-  appended out of order supersedes the newer head before it.
+  appended out of order supersedes the newer head before it. Before each
+  spawn the drain also re-reads the PR from the forge (aegis-qi22): merged
+  (`pr-merged`), closed (`pr-closed`) or a head other than the event's
+  (`head moved to ...`) settles the event as superseded with no spawn. A forge
+  that cannot be read is noted and the event is offered as recorded.
+- **Launch-failed** (settled): a spawn that made a job which then failed to
+  launch counts one `launch-failure` against the event. At
+  `pr_events.MAX_LAUNCH_FAILURES` (3) the event is settled `launch-failed` and
+  raised once to the administrator as a `pr-event-launch-failed` event. Before
+  this, bobbin#259's merge event launched 8 broken merge jobs, one per drain.
+  A refusal that makes no job (governor, pool, authority) is not counted.
 - **Pending** (offered again next drain, exit 2): the spawn refused (governor,
   pool, authority, a merge pin mismatch) or crashed, or the event names no item
   to report on. A refusal is not dropped: the first one is dated in the ledger.
@@ -630,7 +670,7 @@ test suite runs with it so that no test appends to the operator's shuttle log.
 - **One GitHub identity.** A non-author GitHub APPROVE can never exist, so the approval comes from a signed Quipu verdict record (above). Until verdict records are enabled and the signer is registered, merge jobs report `blocked`. That is the safe outcome.
 - **OS isolation remains a prerequisite for unattended jobs.** Compatibility mode retains environment/ancestry restrictions and their detachment limitation. Opt-in verified identity survives session detachment. Shared Unix UIDs are not isolation; unattended launches stay gated until the separately governed distinct-UID setup is verified.
 - **Shared settings.** A spawn never rewrites the shared role settings files. Only crew launches repair the StopFailure hook there. One exception: when the job's harness has *no* role file yet, spawn emits it, using the same emitter and provisioning as `st fleet roles set`. This happens, for example, on the first `--harness agy` or `--harness opencode` job in a store where no crew card runs that harness. Without it, every job on that harness refused with "could not materialize settings" (aegis-j550). An existing file is never touched.
-- **Job tool profiles on agy and opencode.** A bound JobSpec (`[ephemeral.jobs.<job>]`) is enforced for claude, codex, agy and opencode (`job_tools.prepare_settings`). An agy job gets its own canonical file (`settings/agy/job-<name>/settings.json`); its PreToolUse gate runs inside agy's hook adapter on every MCP call, and its workspace MCP kit is replaced by exactly the selected servers. An opencode job gets its own config (`settings/opencode/job-<name>/opencode.json`): `mcp` holds only the selected servers, read from the workspace `.mcp.json` that provisioning wrote for that job (never from the shared role file, which provisioning leaves untouched for a profiled job; the pre-flight compose, before provisioning, gets an empty kit), its `permission` is `{"*": "allow"}` because nobody answers an ask in a job pane (the shared role file keeps `ask`), the bridge plugin knows exactly those names, and the gate runs in the bridge before each tool. An opencode job refuses if any other opencode config (global, or the workspace) declares `mcp`: a server named there would keep a raw tool name the gate never matches. A selected server that is not provisioned also refuses. No job runs with its profile dropped, because that would widen its tool surface.
+- **Job tool profiles on agy and opencode.** A bound JobSpec (`[ephemeral.jobs.<job>]`) is enforced for claude, codex, agy and opencode (`job_tools.prepare_settings`). An agy job gets its own canonical file (`settings/agy/job-<name>/settings.json`); its PreToolUse gate runs inside agy's hook adapter on every MCP call, and its workspace MCP kit is replaced by exactly the selected servers. The folder-trust guard admits the agy files st writes into the job worktree (`.agents/hooks.json`, `.agents/mcp_config.json`, and `.claude/settings.local.json` for a task job) only by the exact sha256 st recorded when it wrote each one; anything else at those paths refuses. An opencode job gets its own config (`settings/opencode/job-<name>/opencode.json`): `mcp` holds only the selected servers, read from the workspace `.mcp.json` that provisioning wrote for that job (never from the shared role file, which provisioning leaves untouched for a profiled job; the pre-flight compose, before provisioning, gets an empty kit), its `permission` is `{"*": "allow"}` because nobody answers an ask in a job pane (the shared role file keeps `ask`), the bridge plugin knows exactly those names, and the gate runs in the bridge before each tool. An opencode job refuses if any other opencode config (global, or the workspace) declares `mcp`: a server named there would keep a raw tool name the gate never matches. A selected server that is not provisioned also refuses. No job runs with its profile dropped, because that would widen its tool surface.
 - **Task workspace consent.** Task jobs have no per-PR allowlist to restore. Provisioning records the hash of the exact workspace consent bytes it emits for that task, so the folder-trust guard can verify them. A later edit, a different workspace, or an unproven file still refuses trust; a completed job is not rebound by provisioning.
 - **Job MCP kit.** The guard used to admit a job's `.mcp.json` when its server *names* were all in the kit, so a planted file that reused a kit name with its own command passed. Provisioning now records the sha256 of the exact `.mcp.json` bytes it publishes into an ephemeral job's own workspace (`kit_mcp_sha256`). The guard requires both conditions: the names are in the kit, and the bytes match that hash. A missing record, a symlink, or any later edit refuses trust (aegis-8et).
 - **Hooks on macOS.** Stop-hook enforcement of the turn and context budgets needs the deployed `st` in the agent's pane. The deadline is enforced by tend regardless.
@@ -1035,7 +1075,7 @@ action fields are reserved for the JobSpec extension.
 
 `verdicts` lists the verdicts the job may report (1-16 names, `blocked`
 required; `failed` is recorded by st at teardown and refuses here). It replaces
-the legacy enum `approve|request-changes|merged|blocked|done|failed` in the
+the legacy enum `approve|request-changes|merged|blocked|done|failed|enqueued` in the
 job prompt and in `st agent spawn --report --verdict`, which refuses any other
 name. `review` and `merge` may only narrow the legacy names, because their gates
 key on `approve`, `request-changes` and `merged`. An absent key keeps the legacy

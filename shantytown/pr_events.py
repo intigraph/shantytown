@@ -39,9 +39,17 @@ _ID = re.compile(r"[0-9a-f]{64}")
 
 LEDGER = "pr-events.jsonl"
 # Outcomes that end an event. "refused" (dates the first refusal),
-# "spawning" (intent, written before the spawn) and "malformed" (a bad line
+# "spawning" (intent, written before the spawn), "launch-failure" (one spawn
+# that made a job which then failed to launch) and "malformed" (a bad line
 # already reported, keyed by line_id) are also written; none settles an event.
-SETTLING = ("admitted", "superseded", "expired")
+SETTLING = ("admitted", "superseded", "expired", "launch-failed")
+# Failed launches an event gets before it is settled "launch-failed" and raised
+# to the administrator. Before this a launch failure only left the event
+# pending, so every drain made one more job: bobbin#259's merge event
+# (aegis-qi22) launched 8 merge jobs about 150 s apart, each dying on the same
+# bug, for a PR that had already merged. A governor or pool refusal makes no
+# job and is not counted; PENDING_TTL_S bounds those.
+MAX_LAUNCH_FAILURES = 3
 # How long a pending event is offered again before it expires. Without a bound
 # a permanent refusal (a merge pin mismatch, a PR closed with no newer head)
 # re-spawned on every drain and held exit 2 forever (review of #776), so a
@@ -171,6 +179,40 @@ def note_malformed(root, lid: str, problem: str, now: float) -> None:
     rec = {"event_id": lid, "outcome": "malformed", "at": now, "detail": problem[:300]}
     with open(p, "a") as fh:
         fh.write(json.dumps(rec, sort_keys=True) + "\n")
+
+
+def launch_failures(root) -> dict[str, int]:
+    """event_id -> how many of its spawns made a job that failed to launch."""
+    out: dict[str, int] = {}
+    for r in _ledger(root):
+        if r.get("outcome") == "launch-failure":
+            out[r["event_id"]] = out.get(r["event_id"], 0) + 1
+    return out
+
+
+def new_jobs(ev: dict, before: set[str], after: list[dict]) -> list[str]:
+    """Job records for this event's step that one spawn created: in `after`
+    (eph.records) but not in `before` (their names before the spawn). A spawn
+    that returned non-OK and left one of these behind made a job that failed
+    to launch; one that left none was refused before any job existed."""
+    return [r["name"] for r in after
+            if r.get("name") not in before
+            and (r.get("job"), r.get("repo"), r.get("pr")) == (ev["job"], ev["repo"], ev["pr"])]
+
+
+def pr_state(ev: dict, info: dict) -> str | None:
+    """Why this event's step no longer applies to the PR as the forge reports
+    it now (`gh api repos/R/pulls/N`), or None while it still does. The file is
+    append-only and the emitter can lag, so its last line is not the PR's
+    state: bobbin#259 merged at 01:56Z and its merge event kept spawning."""
+    if info.get("merged") or info.get("merged_at"):
+        return "pr-merged"
+    if info.get("state") == "closed":
+        return "pr-closed"
+    sha = (info.get("head") or {}).get("sha")
+    if isinstance(sha, str) and sha and sha != ev["head"]:
+        return f"head moved to {sha[:12]}"
+    return None
 
 
 def attempted(root) -> dict[str, float]:

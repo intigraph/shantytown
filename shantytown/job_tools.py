@@ -13,7 +13,7 @@ from dataclasses import replace
 _FIELDS = {"mcp_servers", "skills", "claude_ai_connectors", "mcp_tools", "verdicts"}
 # Review and merge gates key on these exact names (approve/request-changes sign a
 # GateApproval, merged ends the queue), so those jobs may narrow but never rename.
-LEGACY_VERDICTS = ("approve", "request-changes", "merged", "blocked", "done", "failed")
+LEGACY_VERDICTS = ("approve", "request-changes", "merged", "blocked", "done", "failed", "enqueued")
 _GATED_JOBS = {"review", "merge"}
 _RESERVED = {"budget", "model", "harness", "verdict", "trigger", "action", "actions",
              "prompt_template", "max_tool_calls"}
@@ -320,8 +320,12 @@ def prepare_settings(root, card, base):
         # job-owned canonical file; agy's SessionStart refuses a mismatch.
         if not card.workspace:
             raise ValueError("agy job tool profile requires the job workspace")
-        from .harness import for_card
-        for_card(card, root).provision(str(target), root, workspaces=(card.workspace,))
+        # Record the hooks bytes written here (they replace provisioning's), or
+        # the trust guard refuses st's own .agents/hooks.json (eph-task-ed2827).
+        from .agy import project_hooks
+        from .provision import _record_job_kit_file
+        body = project_hooks(card.workspace, str(target))
+        _record_job_kit_file(card, root, Path(card.workspace), ".agents/hooks.json", body)
     if card.harness == "codex":
         # The job-owned config makes its directory the job's CODEX_HOME, so
         # the attended exec-policy rules st wrote at spawn (the exact per-PR

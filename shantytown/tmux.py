@@ -69,6 +69,34 @@ OPTION_KEYS = frozenset("123456789")
 _SEND_CHUNK = 512
 _SEND_CHUNK_GAP_S = 0.05
 _CODEX_SETTLE_S = 0.5
+
+
+def _chunk_argvs(chunk: str) -> list[list[str]]:
+    """The send-keys argument lists that type `chunk` byte-identically.
+
+    tmux parses an argument ENDING in `;` as a command separator and drops the
+    `;`, `-l` and `--` notwithstanding (and `\\;` at the end becomes `;`, so
+    escaping eats a real backslash). Measured on tmux 3.6, `send-keys -l --`:
+
+        "A;"   -> "A"        "x;y"  -> "x;y"    (only a TRAILING ; is eaten)
+        ";"    -> ""         "B\\;"  -> "B;"
+
+    Chunking splits at a fixed width, so whether a body survives depended on
+    where the boundary landed: bobbin#259's merge prompt lost the `;` of
+    "request-changes;" at a 512 boundary and both launches failed the composer
+    check; inbox and nudge paths have no such check and delivered altered text
+    silently (aegis-hni). The trailing `;` run goes as hex keys (`-H 3b`), which
+    tmux never parses as a separator, and the rest stays one literal write.
+    """
+    body = chunk.rstrip(";")
+    tail = len(chunk) - len(body)
+    if not tail:
+        return [["-l", "--", chunk]]
+    argvs = [["-l", "--", body]] if body else []
+    argvs.append(["-H", *(["3b"] * tail)])
+    return argvs
+
+
 # A busy Codex composer is repainted between streamed output, so the first
 # frame after typing can predate the typed body (aegis-4kdx). Poll for it,
 # bounded, rather than judge the whole delivery on one 0.5s sample: a single
@@ -902,8 +930,9 @@ class Tmux:
         for n, chunk in enumerate(chunks):
             if n:
                 self._refuse_in_mode(pane, sent=n)
-            subprocess.run(self._cmd("send-keys", "-t", pane, "-l", "--", chunk),
-                           check=True)
+            for argv in _chunk_argvs(chunk):
+                subprocess.run(self._cmd("send-keys", "-t", pane, *argv),
+                               check=True)
             if n + 1 < len(chunks):
                 time.sleep(_SEND_CHUNK_GAP_S)
         # Refuse copy-mode before settling or returning an unsubmitted body.

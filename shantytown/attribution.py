@@ -54,6 +54,14 @@ ST_TEND = "st fleet tend"
 # The quipu governed-workflow router (`st events`), the other non-agent sender.
 ST_EVENTS = "st quipu-events"
 
+# An ephemeral job's ending (cli._spawn_end): `st agent spawn --report/--stop`
+# or tend's reap all end a job through that one path, so naming tend would be
+# wrong on the --report path. The line it signs is composed by st from ledger
+# fields only (verdict, item, job name); the job agent's own summary is never
+# signed with this name, because for a review job that text is shaped by an
+# untrusted PR and a signature would launder it into a lead's prompt.
+ST_JOB_RESULT = "st ephemeral result"
+
 
 def attribute(text: str, sender: str | None) -> str:
     """Prefix `text` with its sender — but ONLY when the sender is KNOWN.

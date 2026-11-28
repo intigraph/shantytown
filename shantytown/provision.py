@@ -488,7 +488,8 @@ def _manifest_gaps(card: Agent, root, manifest: tooling.Manifest, secrets=None) 
     ws = Path(card.workspace).expanduser()
     from .job_tools import selected as job_profile, filter_manifest
     try:
-        manifest = filter_manifest(manifest, job_profile(root, card.name))
+        spec = job_profile(root, card.name)
+        manifest = filter_manifest(manifest, spec)
     except ValueError:
         return ["job tool profile unresolved"]
     template = json.dumps({"mcpServers": manifest.mcp})
@@ -550,6 +551,13 @@ def _manifest_gaps(card: Agent, root, manifest: tooling.Manifest, secrets=None) 
                 gaps.append("agy-mcp(Quipu drift)")
         except (OSError, ValueError):
             gaps.append("agy-mcp(unreadable)")
+    elif card.harness == "opencode" and spec is not None:
+        # A profiled job's kit is the workspace .mcp.json checked above. Its
+        # own job config gets that kit at launch compose, which refuses any
+        # selected server that is missing (job_tools.prepare_settings). The
+        # SHARED role file holds no kit by design (#802), so comparing it here
+        # refused every profiled opencode job (aegis-j550, measured on vati).
+        pass
     elif card.harness == "opencode":
         from .opencode import config_path, translate_servers
         try:
@@ -1072,7 +1080,9 @@ def _drop_hooks_the_role_file_owns(cfg: dict, role_hooks: dict) -> None:
 def _record_task_consent(card: Agent, root, ws: Path, body: str) -> None:
     """Bind task trust to consent bytes emitted by this provisioning call."""
     from . import ephemeral as eph
-    if card.harness != "claude" or not eph.is_ephemeral_name(card.name):
+    # agy jobs get this file too and also face a folder-trust dialog whose guard
+    # needs its digest (aegis-j550, eph-task-ed2827 had kit_settings_sha256 None).
+    if card.harness not in ("claude", "agy") or not eph.is_ephemeral_name(card.name):
         return
     with eph.lock(root):
         rec = eph.read(root, card.name)
@@ -1091,6 +1101,34 @@ def _record_task_consent(card: Agent, root, ws: Path, body: str) -> None:
         # kit hash made the trust guard reject st's own newly emitted file.
         import hashlib
         rec["kit_settings_sha256"] = hashlib.sha256(emitted).hexdigest()
+        eph.write(root, rec)
+
+
+def _record_job_kit_file(card: Agent, root, ws: Path, rel: str, body: str | None) -> None:
+    """Record the sha256 of a harness workspace file st just wrote into an
+    ephemeral job's worktree (agy's .agents/hooks.json and mcp_config.json), so
+    the trust guard admits exactly st's own bytes and nothing else at that path.
+
+    Without it the guard refused st's own agy kit as foreign and the job never
+    started (aegis-j550, eph-task-ed2827). Same rules as _record_job_mcp: no
+    record, another workspace, a symlink or different bytes on disk records
+    nothing, and the guard then refuses the file. body None means the writer
+    merged in content st did not produce (agy.project_hooks/project_mcp): that
+    records nothing too, so foreign hooks still refuse as they did before."""
+    from . import ephemeral as eph
+    if body is None or not eph.is_ephemeral_name(card.name) or rel not in eph.KIT_FILES:
+        return
+    import hashlib
+    with eph.lock(root):
+        rec = eph.read(root, card.name)
+        if (not rec or not rec.get("workspace")
+                or Path(rec["workspace"]).resolve() != ws.resolve()):
+            return
+        target = ws / rel
+        if target.is_symlink() or target.read_bytes() != body.encode("utf-8"):
+            return
+        files = rec.get("kit_files_sha256") if isinstance(rec.get("kit_files_sha256"), dict) else {}
+        rec["kit_files_sha256"] = {**files, rel: hashlib.sha256(body.encode("utf-8")).hexdigest()}
         eph.write(root, rec)
 
 
@@ -1291,7 +1329,8 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
 
     if card.harness == "agy":
         from .agy import project_hooks, selected_config
-        project_hooks(ws, settings_path or selected_config(card, root))
+        body = project_hooks(ws, settings_path or selected_config(card, root))
+        _record_job_kit_file(card, root, ws, ".agents/hooks.json", body)
 
     # SKILLS FIRST, and outside every early return below: a store that defines no
     # MCP template still has a workspace full of skills the runtime cannot see,
@@ -1404,7 +1443,8 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
         from .agy import project_mcp
         # A profiled job's kit is exactly the selected servers; never merge in
         # whatever an earlier projection left in the workspace.
-        project_mcp(card, root, rendered, replace=template is not None or profile is not None)
+        body = project_mcp(card, root, rendered, replace=template is not None or profile is not None)
+        _record_job_kit_file(card, root, ws, ".agents/mcp_config.json", body)
     if card.harness == "opencode" and profile is None:
         # A profiled job's kit goes into its own job config at launch compose
         # (job_tools.prepare_settings); writing it here would put one job's kit
