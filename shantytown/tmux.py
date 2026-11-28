@@ -1070,14 +1070,13 @@ class Tmux:
 
     def _verify_codex_submission(self, pane: str, text: str, before: str, *, deadline=None) -> None:
         from . import triage
-        was_busy = _codex_submission_busy(before)
         local_deadline = time.monotonic() + _CODEX_DEADLINE_S
         deadline = local_deadline if deadline is None else min(deadline, local_deadline)
         def observed(screen):
             return (triage.input_state(screen) in
                     (triage.INPUT_EMPTY, triage.INPUT_PLACEHOLDER) and
-                    not _codex_queued(screen, text) and
-                    not was_busy and triage.mid_flight(screen))
+                    not _codex_queue(screen) and
+                    triage.mid_flight(screen))
         def watch(polls, screen):
             """(True, screen) once the turn is seen; (False, last screen) otherwise."""
             for _ in range(polls):
@@ -1089,8 +1088,9 @@ class Tmux:
                 except (OSError, subprocess.SubprocessError) as exc:
                     raise PaneSubmissionUnverified(
                         f"UNVERIFIED: cannot observe Codex submission in {pane}") from exc
-                # Existing activity alone proves nothing: the new body can
-                # remain typed while an older turn is still working.
+                # Busy bootstrap hooks can precede the first user turn. Busy
+                # Codex with an empty composer and no visible queue counts
+                # as delivered; a typed or queued body still blocks success.
                 if observed(screen):
                     return True, screen
                 # A fresh session can queue startup input before its first
@@ -1133,7 +1133,6 @@ class Tmux:
                 self._refuse_in_mode(pane, sent=1)
                 subprocess.run(self._cmd("send-keys", "-t", pane,
                                          "Tab" if busy else "Enter"), check=True)
-                was_busy = busy
             else:
                 break
         if _codex_queued(screen, text):

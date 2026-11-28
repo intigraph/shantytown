@@ -133,11 +133,18 @@ def test_clipped_composer_is_not_treated_as_empty(monkeypatch):
     assert keys(calls) == []
 
 
-def test_old_activity_with_no_new_queue_evidence_is_not_success(monkeypatch):
+def test_busy_codex_with_consumed_body_counts_as_delivery(monkeypatch):
     panes, calls = transport(monkeypatch, [BUSY, BUSY])
+    panes.send('worker', BODY)
+    assert [c[-1] for c in keys(calls) if '-l' not in c] == ['Tab']
+
+
+def test_busy_activity_does_not_hide_our_typed_body(monkeypatch):
+    busy_owned = 'Working (1s • esc to interrupt)\n' + OWNED
+    panes, calls = transport(monkeypatch, [BUSY, busy_owned])
     with pytest.raises(tmux.PaneSubmissionUnverified):
         panes.send('worker', BODY)
-    assert [c[-1] for c in keys(calls) if '-l' not in c] == ['Tab']
+    assert [c[-1] for c in keys(calls) if '-l' in c] == [BODY]
 
 
 def test_observed_queue_with_our_preview_is_not_delivery(monkeypatch):
