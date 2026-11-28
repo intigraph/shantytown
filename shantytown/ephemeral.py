@@ -1880,6 +1880,94 @@ def _composer(screen: str):
     return None
 
 
+#: opencode's composer (aegis-j550): a column of `┃` rows closed by a `╹▀▀▀` row.
+#: Measured on 1.18.35 at st's 80x24: the last `┃` row inside the box is the
+#: agent/model line ("Build · Gemma 4 12B (local) Ollama (vati local)"), not
+#: input. An empty box shows a gray "Ask anything… …" suggestion. Typed text is
+#: literal: newlines stay lines, long lines wrap at spaces, and the box scrolls
+#: to its last rows. Transcript echoes of a sent message use `┃` too, but no
+#: `╹` row closes them.
+_OC_BAR = "┃"
+_OC_FOOT = re.compile(r"^\s*╹▀+\s*$")
+_SGR = re.compile(r"\x1b\[([0-9;:]*)m")
+_OC_SUGGESTION_FG = "128;128;128"
+_OC_SUGGESTION = "Ask anything"
+#: The header row of an opencode reply ("▣  Build · <model>"), drawn on submit.
+_OC_REPLY = re.compile(r"^\s*▣\s+\S")
+
+
+def _opencode_box(screen: str):
+    """(input rows, plain lines above) of the LAST opencode composer box, or None.
+
+    Rows are the text after each `┃`, stripped; the agent/model line is dropped
+    and the gray suggestion reads as an empty row. Anything that does not fit
+    the measured layout is None (UNSEEN), so st types nothing into a box it
+    cannot read. The suggestion is only discounted on an attribute-carrying
+    capture: without the gray colour it is judged as text, and refused."""
+    from .triage import strip_attrs
+    raw = screen.splitlines()
+    plain = [strip_attrs(line) for line in raw]
+    foot = next((i for i in range(len(plain) - 1, max(-1, len(plain) - 200), -1)
+                 if _OC_FOOT.match(plain[i])), None)
+    if foot is None:
+        return None
+    top = foot
+    while top > 0 and plain[top - 1].lstrip().startswith(_OC_BAR):
+        top -= 1
+    if foot - top < 2 or "·" not in plain[foot - 1]:
+        return None
+    rows = []
+    for k in range(top, foot - 1):
+        text = plain[k].lstrip()[1:].strip("\xa0 \t")
+        if text.startswith(_OC_SUGGESTION):
+            after = raw[k][raw[k].find(_OC_BAR) + 1:]
+            if _effective_fg(after[:after.find(_OC_SUGGESTION)]) == _OC_SUGGESTION_FG:
+                text = ""
+        rows.append(text)
+    return rows, plain[:top]
+
+
+def _effective_fg(prefix: str) -> str | None:
+    """The foreground colour in force at the end of `prefix`, replaying every SGR.
+
+    Only the LAST colour set counts, and a later reset clears it: gray then
+    `\\x1b[0m` or `\\x1b[39m` before the text is the default colour, not the
+    suggestion (review of #835). 24-bit colours read "r;g;b", 256-colour "5:n",
+    basic ones "ansi:n". Anything this cannot parse reads as "?", which never
+    matches the suggestion, so the row is judged as text and st types nothing."""
+    fg: str | None = None
+    for params in _SGR.findall(prefix):
+        codes = params.split(";") if params else ["0"]
+        i = 0
+        while i < len(codes):
+            code = codes[i] or "0"
+            if not code.isdigit():
+                return "?"
+            n = int(code)
+            if n in (0, 39):
+                fg = None
+            elif 30 <= n <= 37 or 90 <= n <= 97:
+                fg = f"ansi:{n}"
+            elif n in (38, 48):
+                mode = codes[i + 1] if i + 1 < len(codes) else ""
+                width = 3 if mode == "2" else 1 if mode == "5" else None
+                if width is None:
+                    return "?"
+                value = codes[i + 2:i + 2 + width]
+                if len(value) != width or not all(v.isdigit() for v in value):
+                    return "?"
+                if n == 38:
+                    fg = ";".join(value) if mode == "2" else f"5:{value[0]}"
+                i += 1 + width
+            i += 1
+    return fg
+
+
+def _opencode_replies(screen: str) -> int:
+    from .triage import strip_attrs
+    return sum(1 for line in strip_attrs(screen).splitlines() if _OC_REPLY.match(line))
+
+
 def _join_wrapped_paste_tokens(pieces: list[str]) -> list[str]:
     """Rejoin a paste token the composer's row wrap split across two rows.
 
@@ -1943,12 +2031,18 @@ def box_state(screen: str, text: str) -> str:
     from .triage import input_state, INPUT_EMPTY, INPUT_PLACEHOLDER
     frame = _composer(screen)
     if frame is None:
-        return UNSEEN
-    prompt_raw, body, _above = frame
-    first = body[0].split(_PROMPT, 1)[1] if body else ""
-    pieces = [first.strip("\xa0 \t")] + [row.strip("\xa0 \t") for row in body[1:]]
-    if not any(pieces[1:]) and input_state(prompt_raw) in (INPUT_EMPTY, INPUT_PLACEHOLDER):
-        return EMPTY
+        box = _opencode_box(screen)
+        if box is None:
+            return UNSEEN
+        pieces = box[0]
+        if not any(pieces):
+            return EMPTY
+    else:
+        prompt_raw, body, _above = frame
+        first = body[0].split(_PROMPT, 1)[1] if body else ""
+        pieces = [first.strip("\xa0 \t")] + [row.strip("\xa0 \t") for row in body[1:]]
+        if not any(pieces[1:]) and input_state(prompt_raw) in (INPUT_EMPTY, INPUT_PLACEHOLDER):
+            return EMPTY
     # A paste token the row wrap split in two is one token (aegis-8et), not foreign text.
     pieces = _join_wrapped_paste_tokens(pieces)
     pasted = False
@@ -1980,12 +2074,21 @@ def turn_started(before: str, screen: str, text: str) -> bool:
     submit), AND one positive sign of work must show: a busy marker, a spinner
     above the box, or the context-left figure lower than before typing. The
     caller separately requires the agent process to still be alive."""
-    from .triage import mid_flight
+    from .triage import mid_flight, strip_attrs
     if box_state(screen, text) != EMPTY:
         return False
     if mid_flight(screen):
         return True
     frame = _composer(screen)
+    if frame is None and _opencode_box(screen) is not None:
+        # opencode (aegis-j550): its footer reads "esc interrupt" while a turn
+        # runs, and each submitted turn draws a "▣ <agent> · <model>" reply
+        # header above the box. A fast reply can finish between two looks, so a
+        # new header counts as well as the live footer.
+        tail = strip_attrs(screen).rstrip().splitlines()[-3:]
+        if any("esc interrupt" in row for row in tail):
+            return True
+        return _opencode_replies(screen) > _opencode_replies(before)
     above = frame[2] if frame else screen.splitlines()
     if any(_SPINNER.match(row) for row in above[-6:]):
         return True

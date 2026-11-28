@@ -9,6 +9,7 @@ shows it saying NO."""
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -462,3 +463,107 @@ def test_delivery_submits_when_the_paste_token_wraps_across_rows():
     ok, why = _deliver(pane, WRAPPED_JOB, attempts=1)
     assert ok, why
     assert pane.submits == 1
+
+
+# -- opencode (aegis-j550) ----------------------------------------------------
+# Frames captured from opencode 1.18.35 at st's 80x24. empty-job-pane.txt is the
+# saved pane of the failed b1n7 job eph-task-efa937 ("no composer on screen;
+# nothing typed"); the rest came from a scratch session on its own tmux socket.
+_OC = Path(__file__).parent / "fixtures" / "opencode_composer"
+_OC_SHORT = "Reply with the single word: pong"
+_OC_LONG = ("[st startup] You are eph-task-probe, an ephemeral task job.\n\n"
+            "Item: aegis-b1n7 (smoke). Read it with st work item show aegis-b1n7.\n"
+            + "Line of instructions that is fairly long so it wraps across the composer width. " * 12
+            + "\n\nWhen done, report your result.\n"
+            "ST-STARTUP-ANCHOR-COMPLETE:eph-task-probe:0123abcd")
+
+
+def _oc(name: str) -> str:
+    return (_OC / name).read_text()
+
+
+@pytest.mark.parametrize("name", ["empty-job-pane.txt", "empty.txt"])
+def test_opencode_empty_box_with_its_suggestion_is_empty(name):
+    assert eph.box_state(_oc(name), _OC_SHORT) == eph.EMPTY
+
+
+def test_opencode_box_holding_our_job_is_ours_and_other_text_is_foreign():
+    assert eph.box_state(_oc("typed.txt"), _OC_SHORT) == eph.OURS
+    assert eph.box_state(_oc("typed.txt"), "something st never typed") == eph.FOREIGN
+    # A long multi-line job: the box shows only its last wrapped rows.
+    assert eph.box_state(_oc("typed-long.txt"), _OC_LONG) == eph.OURS
+    assert eph.box_state(_oc("typed-long.txt"), _OC_SHORT) == eph.FOREIGN
+
+
+def test_opencode_suggestion_without_attributes_is_not_read_as_empty():
+    from shantytown.triage import strip_attrs
+    # Without the gray colour st cannot tell the suggestion from typed text,
+    # so it must not type into the box.
+    assert eph.box_state(strip_attrs(_oc("empty.txt")), _OC_SHORT) == eph.FOREIGN
+
+
+def test_opencode_echoed_message_above_the_box_is_not_the_box():
+    # working.txt has the sent message echoed in `┃` rows above the real box.
+    assert eph.box_state(_oc("working.txt"), _OC_SHORT) == eph.EMPTY
+
+
+def test_opencode_turn_start_is_seen_live_or_after_a_fast_reply():
+    assert eph.turn_started(_oc("typed.txt"), _oc("working.txt"), _OC_SHORT)
+    assert eph.turn_started(_oc("typed.txt"), _oc("done.txt"), _OC_SHORT)
+    assert not eph.turn_started(_oc("empty.txt"), _oc("empty.txt"), _OC_SHORT)
+    assert not eph.turn_started(_oc("typed.txt"), _oc("typed.txt"), _OC_SHORT)
+
+
+def test_opencode_job_is_typed_submitted_and_seen_starting():
+    frames = {"now": _oc("empty-job-pane.txt")}
+    typed, submits = [], []
+
+    def type_text(text):
+        typed.append(text)
+        frames["now"] = _oc("typed.txt")
+
+    def submit():
+        submits.append(1)
+        frames["now"] = _oc("working.txt")
+
+    started, why = eph.deliver(_OC_SHORT, type_text=type_text, submit=submit,
+                               capture=lambda: frames["now"], alive=lambda: True,
+                               sleep=lambda s: None)
+    assert started, why
+    assert typed == [_OC_SHORT] and submits == [1]
+
+
+_GRAY = "\x1b[38;2;128;128;128m"
+
+
+def _oc_suggestion_followed_by(code: str) -> str:
+    screen = _oc("empty.txt")
+    assert screen.count(_GRAY + "Ask anything") == 1
+    return screen.replace(_GRAY + "Ask anything", _GRAY + code + "Ask anything")
+
+
+@pytest.mark.parametrize("code", [
+    "\x1b[0m", "\x1b[39m", "\x1b[m",          # resets: the text is the default colour
+    "\x1b[38;2;238;238;238m",                 # typed-text colour
+    "\x1b[38;5;245m", "\x1b[37m",             # 256-colour and basic gray are not the suggestion
+    "\x1b[38;2m",                             # malformed: cannot tell, so not empty
+])
+def test_opencode_text_after_a_colour_change_is_not_the_suggestion(code):
+    # Review of #835 (kelly): gray then a reset before "Ask anything" read as
+    # the gray suggestion, so the box looked EMPTY and st would type over text
+    # it did not put there. The colour in force at the text decides.
+    screen = _oc_suggestion_followed_by(code)
+    assert eph.box_state(screen, _OC_SHORT) == eph.FOREIGN
+    typed = []
+    started, why = eph.deliver(_OC_SHORT, type_text=typed.append, submit=lambda: None,
+                               capture=lambda: screen, alive=lambda: True,
+                               sleep=lambda s: None)
+    assert not started and typed == [], why
+
+
+@pytest.mark.parametrize("code", ["\x1b[0m\x1b[38;2;128;128;128m", "\x1b[48;2;30;30;30m"])
+def test_opencode_suggestion_stays_empty_when_gray_is_still_in_force(code):
+    # Positive controls: gray set again after a reset, or a background change
+    # after gray, leaves the suggestion gray.
+    screen = _oc_suggestion_followed_by(code)
+    assert eph.box_state(screen, _OC_SHORT) == eph.EMPTY
