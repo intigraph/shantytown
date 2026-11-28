@@ -295,7 +295,8 @@ GITHUB_ONLY_JOBS = ("review", "merge")
 _GITHUB_HOSTS = ("github.com", "www.github.com")
 
 
-def forge_refusal(job: str, repo: str | None, remote_url: str | None) -> str:
+def forge_refusal(job: str, repo: str | None, remote_url: str | None,
+                  pr: int | None = None) -> str:
     """Why a GitHub-only job cannot run against this repo, or "".
 
     `remote_url` is the origin of the checkout the job would be cut from. An
@@ -308,10 +309,21 @@ def forge_refusal(job: str, repo: str | None, remote_url: str | None) -> str:
     parsed = parse_remote(remote_url)
     if parsed is None or parsed[0].lower() in _GITHUB_HOSTS:
         return ""
-    return foreign_forge_line(job, repo, parsed[0])
+    return foreign_forge_line(job, repo, parsed[0], pr)
 
 
-def foreign_forge_line(job: str, repo: str, forge: str) -> str:
+def foreign_forge_line(job: str, repo: str, forge: str, pr: int | None = None) -> str:
+    if job == "merge":
+        # A GitHub merge job cannot preserve its head/CI guarantees by swapping
+        # only the read commands. Hand off the whole landing to the native path.
+        target = str(pr) if pr is not None else "<number>"
+        return (f"--repo {repo} is hosted on {forge}, not GitHub; "
+                f"refused before any GitHub probe, worktree or pane. "
+                f"Route to the Forgejo merge path: "
+                f"pr-risk merge --forge forgejo --repo {repo} --pr {target} "
+                f"(complete-green check first; --execute only after readiness is proven). "
+                f"Require merge read-back and exact-main CI; retain operator holds "
+                f"and revert on red. Do not retry this as a GitHub merge job")
     return (f"--repo {repo} is hosted on {forge}, not GitHub; ephemeral {job} jobs "
             f"read GitHub only, so this one would spend a slot and end blocked. "
             f"Refused before any worktree or pane: route the PR to a crew reviewer "

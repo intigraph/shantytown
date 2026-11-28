@@ -2016,6 +2016,31 @@ def test_forge_refusal_names_the_forge_only_for_github_only_jobs():
     assert eph.forge_refusal("review", "o/n", None) == ""      # cannot tell admits
 
 
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_forgejo_merge_routes_to_native_landing_before_github(
+        store, monkeypatch, capsys, tmp_path, harness):
+    root, _panes, launched = store
+    checkout = _checkout_with_origin(tmp_path / "native",
+                                     "ssh://git@forge.local:2222/stiwi/example.git")
+    monkeypatch.setattr(cli, "_resolve_repo", lambda name: checkout)
+    monkeypatch.setattr(cli, "_gh_json",
+                        lambda *a, **k: pytest.fail("Forgejo must never query GitHub"))
+    monkeypatch.setattr(cli, "_spawn_merge_outcome",
+                        lambda *a, **k: pytest.fail("no GitHub merge-state probe"))
+    monkeypatch.setattr(eph, "provision_worktree",
+                        lambda *a, **k: pytest.fail("no GitHub job worktree"))
+    rc = _st(root, "--ephemeral", "--job", "merge", "--item", "it-1",
+             "--harness", harness, "--repo", "stiwi/example", "--pr", "766",
+             "--head", "a" * 40)
+    assert rc == cli.REFUSED
+    err = capsys.readouterr().err
+    assert "pr-risk merge --forge forgejo --repo stiwi/example --pr 766" in err
+    assert "complete-green" in err and "exact-main CI" in err
+    assert "merge read-back" in err
+    assert "crew reviewer" not in err
+    assert launched == [] and eph.records(root) == [] and eph.free_slots(root) == 1
+
+
 def test_a_review_on_a_forgejo_repo_refuses_before_any_worktree_or_pane(
         store, monkeypatch, capsys, tmp_path):
     """sattler 2026-11-23: a review job on stiwi/goldblum#1218 spent a slot and

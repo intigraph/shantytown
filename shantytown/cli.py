@@ -4263,7 +4263,7 @@ def _spawn_forge_refusal(req) -> str:
     from .workspace import git_origin
     checkout = _spawn_checkout({"checkout": req.checkout, "repo": req.repo})
     origin = git_origin(checkout) if checkout is not None and checkout.exists() else None
-    return eph.forge_refusal(req.job, req.repo, origin)
+    return eph.forge_refusal(req.job, req.repo, origin, req.pr)
 
 
 def _spawn_checkout_refusal(req) -> str:
