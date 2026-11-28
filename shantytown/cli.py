@@ -5352,8 +5352,7 @@ def _drain_event_launch_failed(a, pe, ev, label, made, why, counts) -> bool:
 
 
 def _drain_event_capped(a, pe, ev, label, rounds, counts) -> None:
-    """Settle an event past pe.MAX_REVIEW_ROUNDS as "capped" and raise the PR
-    to the administrator, once per PR: from here a human reviews or merges."""
+    """Raise a capped PR, then settle; retry failed escalation next drain."""
     text = (f"{label} on {ev['item']}: {rounds} review rounds already recruited "
             f"(max {pe.MAX_REVIEW_ROUNDS}); the drain recruits no more review or fix "
             f"jobs for {ev['repo']}#{ev['pr']}. A human must review, fix or merge it.")
@@ -5361,27 +5360,32 @@ def _drain_event_capped(a, pe, ev, label, rounds, counts) -> None:
     print(f"  capped {text}", file=sys.stderr)
     if a.dry_run:
         return
-    pe.settle(a.root, ev, "capped", time.time(), text)
-    _drain_event_raise(a, ev, "capped", text, f"pr-events:{ev['repo']}#{ev['pr']}:capped")
+    # Settling first lost the only escalation when the event store was down.
+    # Persist first; its stable key also covers a crash before settlement.
+    if _drain_event_raise(a, ev, "capped", text, f"pr-events:{ev['repo']}#{ev['pr']}:capped"):
+        pe.settle(a.root, ev, "capped", time.time(), text)
+    else:
+        counts["pending"] += 1
 
 
-def _drain_event_raise(a, ev, outcome, text, key) -> None:
-    """Raise a settled event to the administrator. The key makes the raise
-    idempotent; a failed raise is printed and the settle stands."""
+def _drain_event_raise(a, ev, outcome, text, key) -> bool:
+    """Return whether the keyed escalation was durably persisted."""
     from .events import FilesEvents
     cfg, _err = config.load_or_default(Path(a.root))
     admin, _ = _spawn_administrator(FilesRegistry(Path(a.root) / "crew"), cfg)
     if not admin:
         print(f"  ⚠ no administrator card on this host; {outcome} NOT raised",
               file=sys.stderr)
-        return
+        return False
     try:
         FilesEvents(Path(a.root) / "events").persist(
             to=admin, frm="pr-events", reason=f"pr-event-{outcome}", rose=True,
             item=ev["item"], detail=text[:600], key=key)
-    except Exception as e:  # noqa: BLE001 -- the settle stands; say the raise did not
+    except Exception as e:  # noqa: BLE001 -- report persistence failure to the caller
         print(f"  ⚠ {outcome} NOT raised to {admin} ({type(e).__name__}: {e})",
               file=sys.stderr)
+        return False
+    return True
 
 
 def _drain_event_pending(a, pe, ev, label, refused, counts, why) -> None:
