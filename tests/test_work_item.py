@@ -66,6 +66,31 @@ def test_tracker_protocol_is_still_three_methods():
         "get", "update", "create"}
 
 
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_non_ask_unblocks_refuses_before_any_write(dry_run):
+    class Controlled:
+        def get(self, item_id):
+            return WorkItem(item_id, issue_type="task")
+
+        def update(self, *args, **kwargs):
+            pytest.fail("non-Ask --unblocks must never write")
+
+    operation = args("blocker-1", "update", unblocks="dependent-2")
+    operation.dry_run = dry_run
+    with pytest.raises(ValueError, match="Ask-only.*sd dep add dependent-2 blocker-1"):
+        work_item.command(operation, Controlled())
+
+
+@pytest.mark.parametrize("existing_type,new_type", [("ask", None), ("task", "ask")])
+def test_ask_unblocks_still_accepts_metadata(tmp_path, existing_type, new_type):
+    tracker = FilesTracker(tmp_path / "items")
+    item = tracker.create("controlled fixture", issue_type=existing_type)
+    result = work_item.command(args(item.id, "update", unblocks="dependent-2",
+                                    issue_type=new_type), tracker)
+    assert result["result"] == "verified"
+    assert tracker.get(item.id).unblocks == "dependent-2"
+
+
 @pytest.mark.parametrize("envelope,verified", [
     ({"text": "exact body"}, True),
     ({"body": "exact body"}, True),

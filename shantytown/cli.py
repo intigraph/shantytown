@@ -1888,7 +1888,8 @@ def build_parser() -> argparse.ArgumentParser:
     wi.add_argument("--status", choices=("open", "in_progress"))
     wi.add_argument("--assignee")
     wi.add_argument("--type", dest="issue_type")
-    wi.add_argument("--unblocks")
+    wi.add_argument("--unblocks", help="Ask-only metadata: item or epic this Ask unblocks; "
+                    "for a dependency edge use sd dep add <dependent> <blocker>")
     wi.add_argument("--default")
     wi.add_argument("--expires-at")
     wi.add_argument("--reviewer", help="reserve one independent reviewer on the seed")

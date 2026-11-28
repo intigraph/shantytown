@@ -293,6 +293,13 @@ def command(args, tracker):
             raise ValueError("update requires explicit fields")
         if fields.get("status") == "closed":
             raise ValueError("use close with a reason file for terminal work")
+        if "unblocks" in fields:
+            from .ask_visibility import is_ask
+            if not is_ask(asdict(item) | fields):
+                raise ValueError(
+                    "--unblocks is Ask-only metadata, not a dependency edge; "
+                    f"use `sd dep add {fields['unblocks']} {item.id}` "
+                    "to make that item depend on this one")
         text_fields = {key: value for key, value in fields.items()
                        if key in ("notes", "description")}
         if replace_text and not text_fields:
