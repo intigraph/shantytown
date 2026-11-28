@@ -409,6 +409,16 @@ performance. The default `0` retains existing reads. Invalid setting values
 refuse. Live activation and measured acceptance require the upstream admission
 packet and normal deployment; enabling this flag alone cannot establish either.
 
+Item display and exact work context require expanded, typed wire cells. They
+declare a bounded verbose primary read under `QUIPU_AGENT=st-typed-cells` before
+dispatch, whether push reads are enabled or disabled. Episode and ruling
+context reads are outside the Seeds projection and declare their primary route
+under `QUIPU_AGENT=st-context-root`. These reads bypass neither a failed push
+attempt nor the primary-profiling refusal: they never attempt push or retry on
+error. An incomplete or failed typed/ROOT read leaves its section UNKNOWN.
+Ordinary board projections retain their existing push route. Lossless typed
+cells in the push protocol remain a separate contract change.
+
 ### Optional Python read-dispatch budget
 
 `ST_QUIPU_READS_PER_MINUTE` is off by default (`0`). A positive integer up to

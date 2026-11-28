@@ -17,7 +17,7 @@ from urllib.request import Request, urlopen
 
 from .answer import Answer
 from .owner_display_cache import shared_owner_display
-from .query_identity import read_headers, declared_read_operation
+from .query_identity import read_headers, declared_read_operation, declared_query_identity
 from . import seeds_read_cache, seeds_push_read
 
 SCHEMA = "https://schema.org/"
@@ -123,9 +123,39 @@ def _query(proof, query: str, timeout: int, *, verbose: bool = False) -> dict:
     )
 
 
-def _query_wire(proof, query: str, timeout: int, *, verbose: bool = False) -> dict:
+def typed_cells_query(proof, query: str, timeout: int, *, verbose: bool = True) -> dict:
+    """Declare an expanded, typed result read before choosing its transport.
+
+    Item identity cannot be reconstructed from the projection's compact cells.
+    This is a separate supported primary read, never recovery from a push
+    refusal and never evidence about the projection's execution time.
+    """
+    if verbose is not True:
+        raise ValueError("typed cells require the verbose wire representation")
+    with declared_query_identity("st-typed-cells", operation="typed-cells"):
+        return _query_wire(proof, query, seeds_read_cache.projection_timeout(timeout),
+                           verbose=True, declared_agent="st-typed-cells")
+
+
+def root_context_query(proof, query: str, timeout: int, *, verbose: bool = True) -> dict:
+    """ROOT evidence is outside the board projection, regardless of its health."""
+    if verbose is not True:
+        raise ValueError("ROOT context requires the verbose wire representation")
+    with declared_query_identity("st-context-root", operation="root-context"):
+        return _query_wire(proof, query, seeds_read_cache.projection_timeout(timeout),
+                           verbose=True, declared_agent="st-context-root")
+
+
+def _query_wire(proof, query: str, timeout: int, *, verbose: bool = False,
+                declared_agent: str | None = None) -> dict:
     headers = {"Content-Type": "application/json", "X-Quipu-Client": "seeds"}
     headers.update(read_headers())
+    if declared_agent is not None:
+        if declared_agent not in ("st-typed-cells", "st-context-root"):
+            raise ValueError("unsupported declared typed/ROOT reader")
+        # An inherited QUIPU_AGENT normally wins caller attribution. These two
+        # explicit read contracts must remain separately measurable even then.
+        headers["X-Quipu-Agent"] = declared_agent
     payload = {"query": query}
     if verbose:
         payload["verbose"] = True

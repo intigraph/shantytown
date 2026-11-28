@@ -16,7 +16,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from .seeds_plate import SCHEMA, SEEDS, _iri, _query
+from .seeds_plate import (SCHEMA, SEEDS, _iri, typed_cells_query as _query,
+                          root_context_query as _root_query)
 
 PROV = "http://www.w3.org/ns/prov#"
 RDFS = "http://www.w3.org/2000/01/rdf-schema#"
@@ -49,9 +50,10 @@ def _value(cell):
     return cell
 
 
-def _rows(proof, query, timeout):
+def _rows(proof, query, timeout, *, root=False):
+    read = _root_query if root else _query
     return [{k: _value(v) for k, v in row.items()}
-            for row in _query(proof, query, timeout, verbose=True)["rows"]]
+            for row in read(proof, query, timeout, verbose=True)["rows"]]
 
 
 def episodes_query(subject: str, about: str, limit: int = EPISODES) -> str:
@@ -115,10 +117,10 @@ def context(tracker, item_id: str, *, onto: str, timeout: int = 5) -> Context:
         lambda: _rows(proof, comments_query(proof.graph, item_iri), timeout)))
     result.sections.append(_section(
         "episodes", f"?act <{onto}aboutWorkItem> <{subject}>",
-        lambda: _rows(proof, episodes_query(subject, onto + "aboutWorkItem"), timeout)))
+        lambda: _rows(proof, episodes_query(subject, onto + "aboutWorkItem"), timeout, root=True)))
     result.sections.append(_section(
         "rulings", f"?ruling <{onto}trackedBy> <{subject}>",
-        lambda: _rows(proof, rulings_query(subject, onto + "trackedBy"), timeout)))
+        lambda: _rows(proof, rulings_query(subject, onto + "trackedBy"), timeout, root=True)))
     return result
 
 
