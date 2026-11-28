@@ -78,7 +78,7 @@ def anchor_world(root, monkeypatch, role):
     projection = SimpleNamespace(me=SimpleNamespace(role=role), item=None,
                                  render=lambda: 'fixture anchor')
     monkeypatch.setattr(cli, '_me', lambda _: 'admin')
-    monkeypatch.setattr(cli, '_resolve_anchor', lambda *_: (
+    monkeypatch.setattr(cli, '_resolve_anchor', lambda *_, **_kwargs: (
         projection, SimpleNamespace(store=None), SimpleNamespace(get=lambda _: None)))
     monkeypatch.setattr(cli.plate_publish, 'publish', lambda *_a, **_k: None)
     monkeypatch.setattr(cli.plate_publish, 'own_session', lambda: None)

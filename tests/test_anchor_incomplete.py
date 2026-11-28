@@ -1,0 +1,52 @@
+"""A shed owner read must not publish a clean empty plate (y4mc row 10)."""
+import json
+from types import SimpleNamespace
+
+import pytest
+
+from shantytown import cli
+from shantytown.answer import Answer
+from shantytown.br import plate_reader
+from shantytown.tmux import NullPanes
+
+
+@pytest.mark.parametrize('phase', ['owner', 'readiness'])
+@pytest.mark.parametrize('flags', [[], ['--short'], ['--json']])
+def test_incomplete_owner_read_is_unknown_not_empty(tmp_path, monkeypatch, capsys, flags, phase):
+    (tmp_path / 'crew').mkdir()
+    (tmp_path / 'crew' / 'worker.json').write_text(json.dumps({'role': 'worker'}))
+    def owner_rows(_):
+        if phase == 'owner':
+            return Answer.capped([], how='fixture owner query',
+                                 caveat='HTTP 429 read_not_started')
+        return Answer.complete_read([{'id': 'fixture-1', 'title': 'known owned work',
+                                      'assignee': 'worker', 'status': 'open', 'priority': 0}],
+                                     how='fixture complete owner query')
+
+    tracker = SimpleNamespace(plate_rows=owner_rows,
+                              plate_ready_ids=lambda _: Answer.capped(
+                                  set(), how='fixture readiness query',
+                                  caveat='HTTP 429 read_not_started'))
+
+    def reader(*args, **kwargs):
+        # Keep bounded display coalescing while refusing incomplete evidence.
+        assert kwargs.get('display') is True
+        # Exercise the real partial-answer boundary, not a mocked CLI exception.
+        return plate_reader(tracker, require_complete=kwargs.get('require_complete', False))
+
+    monkeypatch.setattr(cli, '_plate', reader)
+    monkeypatch.setattr(cli, 'Tmux', lambda *a, **k: NullPanes())
+    published = []
+    monkeypatch.setattr(cli.plate_publish, 'publish', lambda *a, **k: published.append(a))
+    code = cli.main(['--root', str(tmp_path), '--backend', 'files',
+                     'anchor', 'worker', *flags])
+    captured = capsys.readouterr()
+    assert code == cli.CANNOT_TELL
+    assert 'UNKNOWN' in captured.err and '429' in captured.err
+    assert not published
+    if '--json' in flags:
+        packet = json.loads(captured.out)
+        assert packet['availability'] == 'unknown' and packet['item'] is None
+        assert '429' in packet['error']
+    else:
+        assert captured.out == ''
