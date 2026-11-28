@@ -294,7 +294,17 @@ not the signed controller `recruit_*` path.
 - **Superseded** (settled): the file holds a newer head for that PR, so the
   step is stale. The new head's own events re-arm it. "Newer" means later in
   the file, so the emitter must append lines in observation order. A line
-  appended out of order supersedes the newer head before it.
+  appended out of order supersedes the newer head before it. Before each
+  spawn the drain also re-reads the PR from the forge (aegis-qi22): merged
+  (`pr-merged`), closed (`pr-closed`) or a head other than the event's
+  (`head moved to ...`) settles the event as superseded with no spawn. A forge
+  that cannot be read is noted and the event is offered as recorded.
+- **Launch-failed** (settled): a spawn that made a job which then failed to
+  launch counts one `launch-failure` against the event. At
+  `pr_events.MAX_LAUNCH_FAILURES` (3) the event is settled `launch-failed` and
+  raised once to the administrator as a `pr-event-launch-failed` event. Before
+  this, bobbin#259's merge event launched 8 broken merge jobs, one per drain.
+  A refusal that makes no job (governor, pool, authority) is not counted.
 - **Pending** (offered again next drain, exit 2): the spawn refused (governor,
   pool, authority, a merge pin mismatch) or crashed, or the event names no item
   to report on. A refusal is not dropped: the first one is dated in the ledger.

@@ -292,3 +292,87 @@ def test_a_head_less_hand_spawned_job_does_not_settle_a_new_head():
     assert pe.in_flight(ev, [], [ticket], since=100.0) == "q-1"
     exact = {**hand, "name": "eph-merge-x", "head": NEWER, "spawned_at": 1.0}
     assert pe.in_flight(ev, [exact], [], since=100.0) == "eph-merge-x"
+
+
+# --- aegis-qi22: a launch that always fails, and a PR that already merged ----
+
+def test_a_launch_that_always_fails_spawns_3_times_then_is_terminal(store, tmp_path, capsys):
+    # bobbin#259's merge event launched 8 jobs, each dying on the same bug.
+    root, panes, launched = store
+    panes.behaviour["rc"] = cli.REFUSED                  # every launch fails
+    events = _write(tmp_path / "ev.jsonl", _ev())
+    eid = _ev()["event_id"]
+    for _ in range(pe.MAX_LAUNCH_FAILURES - 1):
+        assert _st(root, "--drain-events", str(events)) == cli.CANNOT_TELL
+        assert eid not in pe.settled(root)
+    assert _st(root, "--drain-events", str(events)) == cli.CANNOT_TELL
+    err = capsys.readouterr().err
+    assert "launch-failed task o/n#7" in err
+    assert pe.settled(root)[eid]["outcome"] == "launch-failed"
+    for _ in range(3):                                   # terminal: never again
+        assert _st(root, "--drain-events", str(events)) == cli.OK
+    assert len(launched) == pe.MAX_LAUNCH_FAILURES == 3
+    # Raised once to the administrator, by key, not on every drain.
+    raised = [json.loads(p.read_text()) for p in (root / "events").rglob("*.json")]
+    raised = [e for e in raised if e.get("reason") == "pr-event-launch-failed"]
+    assert len(raised) == 1 and raised[0]["to"] == "boss" and raised[0]["item"] == "it-1"
+
+
+def test_a_refusal_before_any_job_exists_is_not_a_launch_failure(store, tmp_path, monkeypatch):
+    # The cap counts launches only: a governor hold makes no job, stays
+    # pending and is bounded by PENDING_TTL_S, so it must not go terminal.
+    root, _panes, launched = store
+    monkeypatch.setattr(cli, "_spawn_governor_refusal", lambda a, card: "governor: held")
+    events = _write(tmp_path / "ev.jsonl", _ev())
+    for _ in range(pe.MAX_LAUNCH_FAILURES + 2):
+        assert _st(root, "--drain-events", str(events)) == cli.CANNOT_TELL
+    assert pe.settled(root) == {} and pe.launch_failures(root) == {}
+
+
+def test_a_launch_that_fails_then_succeeds_is_admitted(store, tmp_path):
+    root, panes, launched = store
+    panes.behaviour["rc"] = cli.REFUSED
+    events = _write(tmp_path / "ev.jsonl", _ev())
+    assert _st(root, "--drain-events", str(events)) == cli.CANNOT_TELL
+    panes.behaviour["rc"] = cli.OK
+    assert _st(root, "--drain-events", str(events)) == cli.OK
+    assert pe.settled(root)[_ev()["event_id"]]["outcome"] == "admitted"
+    assert len(launched) == 2
+
+
+def _forge(monkeypatch, **info):
+    seen = []
+
+    def gh(*args):
+        seen.append(args[0])
+        return {"state": "open", "merged": False, "head": {"sha": HEAD}, **info}
+    monkeypatch.setattr(cli, "_gh_json", gh)
+    return seen
+
+
+@pytest.mark.parametrize("info,why", [
+    ({"state": "closed", "merged": True, "merged_at": "2026-11-28T01:56:26Z"}, "pr-merged"),
+    ({"state": "closed"}, "pr-closed"),
+    ({"head": {"sha": NEWER}}, "head moved to bbbbbbbbbbbb"),
+])
+def test_a_pr_that_moved_on_spawns_nothing_and_is_settled(store, tmp_path, monkeypatch, capsys, info, why):
+    root, _panes, launched = store
+    seen = _forge(monkeypatch, **info)
+    events = _write(tmp_path / "ev.jsonl", _ev(job="merge"))
+    assert _st(root, "--drain-events", str(events)) == cli.OK
+    assert launched == [] and eph.records(root) == []
+    assert seen == ["repos/o/n/pulls/7"]
+    rec = pe.settled(root)[_ev(job="merge")["event_id"]]
+    assert rec["outcome"] == "superseded" and rec["detail"] == why
+    assert why in capsys.readouterr().out
+    assert _st(root, "--drain-events", str(events)) == cli.OK
+    assert launched == []
+
+
+def test_an_open_pr_at_the_event_head_still_spawns(store, tmp_path, monkeypatch):
+    # The re-read says no only when the PR moved on.
+    root, _panes, launched = store
+    _forge(monkeypatch)
+    events = _write(tmp_path / "ev.jsonl", _ev())
+    assert _st(root, "--drain-events", str(events)) == cli.OK
+    assert len(launched) == 1
