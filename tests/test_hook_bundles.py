@@ -680,6 +680,11 @@ def test_the_real_evidence_runner_is_fail_closed():
     assert hb._run_evidence("echo 1790000000")[0] == 1790000000.0
     assert hb._run_evidence("echo not-a-number")[0] is None
     assert hb._run_evidence("exit 3")[0] is None
+    # The reason a command gives is kept (aegis-9uq.1: tambo's "capture off").
+    assert hb._run_evidence("exit 3")[1] == "evidence command exited 3"
+    why = hb._run_evidence("echo noise >&2; echo 'Error: capture off: memory plan is not applied (phase applying)' >&2; exit 1")[1]
+    assert why == "evidence command exited 1: capture off: memory plan is not applied (phase applying)"
+    assert len(hb._run_evidence("python3 -c 'import sys; sys.stderr.write(\"x\"*999)'; exit 1")[1]) < 200
 
 
 # --- register re-renders EVERY emitted role file (the set check inspects) --------------
