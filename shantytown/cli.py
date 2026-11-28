@@ -3924,7 +3924,13 @@ def _spawn_inside(a, *, principal=None) -> str | None:
 
 def _gh_json(*args):
     import subprocess
-    r = subprocess.run(["gh", "api", *args], capture_output=True, text=True, timeout=60)
+    try:
+        r = subprocess.run(["gh", "api", *args], capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        # A hung gh (stalled TLS, `dial tcp ... i/o timeout`) raised
+        # TimeoutExpired, which no caller's (RuntimeError, ValueError, OSError)
+        # caught, so an offline spawn died with a traceback (PR #831 review).
+        raise RuntimeError(f"gh api {args[0]} timed out after 60s") from None
     if r.returncode != 0:
         raise RuntimeError(f"gh api {args[0]} failed: {(r.stderr or '').strip()[:160]}")
     return json.loads(r.stdout)
@@ -4697,7 +4703,7 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
                 head, request_id = _spawn_merge_pin(a, a.head, a.item, a.pr_repo, a.pr)
             req = eph.Request(job=a.job, item=a.item, harness=a.harness, repo=a.pr_repo,
                               pr=a.pr, checkout=str(a.checkout) if a.checkout else None,
-                              head=head if a.job == "merge" or recruiter_scope or recruitment else None, request_id=request_id,
+                              head=head, request_id=request_id,
                               track=getattr(a, "track", None))
             if req.job == "task" and req.repo and recruiter_scope is None and recruitment is None:
                 import dataclasses
@@ -4708,6 +4714,20 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
             raise eph.Refused(refusal)
         if refusal := _spawn_checkout_refusal(req):
             raise eph.Refused(refusal)
+        if req.job in ("review", "task") and req.repo and req.pr and req.head is None:
+            # Hand spawns used to discard their head, so the event drain could
+            # only delay a duplicate review, then launch it after the first ended.
+            # A failed lookup stays unknown for compatibility with offline jobs;
+            # occupied() defers these records rather than claiming an exact match.
+            try:
+                info = _gh_json(f"repos/{req.repo}/pulls/{req.pr}")
+                pr_head = info.get("head") if isinstance(info, dict) else None
+                observed = pr_head.get("sha") if isinstance(pr_head, dict) else None
+            except (RuntimeError, ValueError, OSError):
+                observed = None
+            if isinstance(observed, str) and eph._SHA.fullmatch(observed):
+                import dataclasses
+                req = dataclasses.replace(req, head=observed)
         if recruitment is not None:
             try:
                 recruitment.request(req)
@@ -5204,7 +5224,7 @@ def _spawn_drain_events(a) -> int:
     except OSError as e:
         raise eph.Refused(f"cannot read {a.drain_events}: {e.strerror or e}") from None
     rc = OK
-    counts = {"admitted": 0, "superseded": 0, "pending": 0, "expired": 0,
+    counts = {"admitted": 0, "superseded": 0, "pending": 0, "expired": 0, "deferred": 0,
               "launch-failed": 0, "capped": 0}
     with pe.lock(a.root):
         reported = pe.malformed_seen(a.root)
@@ -5252,6 +5272,21 @@ def _spawn_drain_events(a) -> int:
                     pe.settle(a.root, ev, "admitted", time.time(), f"already in flight as {running}")
                 counts["admitted"] += 1
                 print(f"  admitted {label}: already in flight as {running}")
+                continue
+            # Checked before the forge re-read: a busy PR costs no gh call, and
+            # the re-read below still runs before any spawn.
+            busy = pe.occupied(ev, eph.live(a.root), eph.tickets(a.root))
+            if busy and busy[1]:
+                if not a.dry_run:
+                    pe.settle(a.root, ev, "admitted", time.time(), f"already running as {busy[0]}")
+                counts["admitted"] += 1
+                print(f"  admitted {label}: already running as {busy[0]}")
+                continue
+            if busy:
+                # Unsettled and undated: not a refusal, so it neither expires
+                # nor holds exit 2; the next drain after that job ends offers it.
+                counts["deferred"] += 1
+                print(f"  deferred {label}: {busy[0]} is already doing this job on the PR")
                 continue
             stale = _drain_event_pr_stale(ev)
             if stale:
@@ -5305,7 +5340,7 @@ def _spawn_drain_events(a) -> int:
                 _drain_event_pending(a, pe, ev, label, refused, counts, why)
     verb = "would admit" if a.dry_run else "admitted"
     print(f"  pr events: {verb} {counts['admitted']}, superseded {counts['superseded']}, "
-          f"pending {counts['pending']}, expired {counts['expired']}, "
+          f"pending {counts['pending']}, deferred {counts['deferred']}, expired {counts['expired']}, "
           f"launch-failed {counts['launch-failed']}, capped {counts['capped']}, already settled "
           f"{len({e['event_id'] for e in events} & set(done))}")
     return rc

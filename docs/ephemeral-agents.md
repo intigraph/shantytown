@@ -345,8 +345,8 @@ not the signed controller `recruit_*` path.
   again, so a permanent refusal (a pin mismatch, a closed PR) cannot hold exit 2
   forever. A new head re-arms the step.
 - **Already in flight** (settled as admitted): a live job or queued ticket
-  already has this job, repo and PR, and either the exact head (merge records
-  keep it) or, for head-less review and task records, a spawn or enqueue time
+  already has this job, repo and PR, and either the exact head or, for
+  legacy/offline head-less records, a spawn or enqueue time
   at or after the event's own `spawning` intent line. This covers a drain that
   crashed after the spawn but before it settled; for review and merge jobs the
   spawn path does not refuse a duplicate itself. A job spawned before the attempt, such as a hand-spawned
@@ -360,8 +360,22 @@ not the signed controller `recruit_*` path.
   again, and the PR is raised to the administrator once (`pr-event-capped`). A
   capped PR does not land by itself; a human reviews, fixes or merges it. A
   merge event for an approved head is never capped. Only drain-admitted reviews
-  count, so a review spawned by hand is not a round, and re-admitting the same
+  count, so a review spawned by hand is not an extra round, and re-admitting the same
   head is not a new round either.
+- **Already running** (aegis-8et): ANY live job or queued ticket with the same
+  job, repo and PR, whoever launched it, including a hand spawn by the
+  administrator. If its record keeps this exact head, the event settles as
+  admitted. Review and task requests retain `--head`; without it, spawn tries
+  to read the current PR head. If that read cannot prove a head, the record
+  remains head-less. Any head-less record (including a legacy merge ticket)
+  may be on an older head, so the event is **deferred** instead: it is not
+  settled and not dated as a refusal,
+  so it neither expires nor exits 2, and the first drain after that job ends
+  offers it again. On 11-27, 9 of 10 concurrent duplicate jobs were a hand
+  spawn plus a drain spawn of the same step 29-91 s apart. Two task jobs on
+  one PR branch would also race their pushes, so a task on a different known
+  head defers too. A job still launching also defers until its launch succeeds
+  or fails; an unproved launch cannot settle another event as admitted.
 - A `merge` event whose reason is not `green-and-approved` is refused as an
   emitter bug. `--dry-run` prints the spawns and settles nothing.
 
