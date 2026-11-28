@@ -1849,6 +1849,13 @@ SUBMIT_ATTEMPTS = 3
 LOOK_S = 0.4
 SHOW_LOOKS = 20      # ~8s for the box to show the typed job
 START_LOOKS = 15     # ~6s per Enter for the turn to start
+# A box that is still FILLING with our text is waited on past SHOW_LOOKS
+# (aegis-j550): opencode 1.18.35 on vati renders a typed ~4KB job over 10-20s,
+# measured with a throwaway pane, and nothing is lost (the last line and a later
+# key both arrive). The wait continues only while the box rows keep changing,
+# ends after STALL_LOOKS unchanged looks, and never runs past GROW_LOOKS.
+GROW_LOOKS = 225     # ~90s cap on a still-filling box
+STALL_LOOKS = 10     # ~4s with no new text in the box ends the wait
 _PROMPT = "\u276f"   # the Claude Code composer glyph
 _BORDER = set("\u2500\u2501")
 #: A Claude Code spinner line, e.g. "✶ Roosting…" or "· Finagling… (1s · thinking)".
@@ -2096,9 +2103,20 @@ def turn_started(before: str, screen: str, text: str) -> bool:
     return was is not None and now is not None and now < was
 
 
+def _box_rows(screen: str) -> tuple[str, ...] | None:
+    """The composer's text rows, to tell a box that is still filling from one
+    that stopped: the transcript and footer can repaint without new input."""
+    frame = _composer(screen)
+    if frame is not None:
+        return tuple(frame[1])
+    box = _opencode_box(screen)
+    return tuple(box[0]) if box is not None else None
+
+
 def deliver(text: str, *, type_text, submit, capture, alive, sleep=time.sleep,
             attempts: int = SUBMIT_ATTEMPTS, show_looks: int = SHOW_LOOKS,
-            start_looks: int = START_LOOKS, look_s: float = LOOK_S) -> tuple[bool, str]:
+            start_looks: int = START_LOOKS, look_s: float = LOOK_S,
+            grow_looks: int = GROW_LOOKS, stall_looks: int = STALL_LOOKS) -> tuple[bool, str]:
     """Put the job in the box and start its turn, or say exactly why not.
 
     Returns (started, what happened). Never presses Enter unless the box holds
@@ -2130,6 +2148,19 @@ def deliver(text: str, *, type_text, submit, capture, alive, sleep=time.sleep,
         # end of the wait, and Enter is pressed only on a frame that is OURS.
         if state == OURS:
             break
+    if state == PARTIAL:
+        rows, still = _box_rows(screen), 0
+        for _ in range(grow_looks):
+            sleep(look_s)
+            screen = capture()
+            state = box_state(screen, text)
+            if state != PARTIAL:
+                break
+            now = _box_rows(screen)
+            still = still + 1 if now == rows else 0
+            rows = now
+            if still >= stall_looks:
+                break
     if state == FOREIGN:
         seen = foreign_fragment(screen, text) or ""
         shown = seen if len(seen) <= 80 else seen[:77] + "..."

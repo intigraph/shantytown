@@ -567,3 +567,58 @@ def test_opencode_suggestion_stays_empty_when_gray_is_still_in_force(code):
     # after gray, leaves the suggestion gray.
     screen = _oc_suggestion_followed_by(code)
     assert eph.box_state(screen, _OC_SHORT) == eph.EMPTY
+
+
+# -- a box still filling with the job (aegis-j550) ------------------------------
+# opencode 1.18.35 on vati renders a typed ~4KB job over 10-20s (measured with a
+# throwaway pane: nothing is lost, the last line arrives late). The live b1n7
+# retry eph-task-db96a9 was refused "never showed in the composer (partial)"
+# after the 8s window while the job was still arriving.
+
+class FillingPane(ClaudePane):
+    """Shows one more line of the typed job per look, from `start` lines, and
+    stops growing after `stall_at` lines (None: grows to the end)."""
+
+    def __init__(self, *, start=1, stall_at=None, **kw):
+        super().__init__(**kw)
+        self.start, self.stall_at, self.looks = start, stall_at, 0
+        self._lines: list[str] = []
+
+    def type_text(self, text: str) -> None:
+        self.typed.append(text)
+        self._lines, self._shown = text.split("\n"), self.start
+
+    def submit(self) -> None:
+        self._lines = []
+        super().submit()
+
+    def capture(self) -> str:
+        self.looks += 1
+        if self._lines:
+            cap = len(self._lines) if self.stall_at is None else self.stall_at
+            self.composer = self._lines[:min(self._shown, cap)]
+            self._shown += 1
+        return super().capture()
+
+
+def test_a_box_still_filling_past_the_show_window_is_waited_on_then_submitted():
+    job = _job(n_lines=8)                       # 10 lines: below the paste fold
+    pane = FillingPane()
+    ok, why = _deliver(pane, job, show_looks=4)
+    assert ok, why
+    assert pane.submits == 1 and pane.typed == [job]
+
+
+def test_a_box_that_stops_filling_short_of_the_job_gets_no_enter():
+    pane = FillingPane(stall_at=6)
+    ok, why = _deliver(pane, _job(n_lines=8), show_looks=4, stall_looks=3, grow_looks=50)
+    assert not ok and pane.submits == 0
+    assert "never showed in the composer (partial)" in why
+    # It gave up a few looks after the box stopped changing, not at the cap.
+    assert pane.looks < 4 + 50
+
+
+def test_the_wait_for_a_filling_box_is_bounded():
+    pane = FillingPane()
+    ok, why = _deliver(pane, _job(n_lines=8), show_looks=1, grow_looks=3, stall_looks=99)
+    assert not ok and pane.submits == 0 and "(partial)" in why
